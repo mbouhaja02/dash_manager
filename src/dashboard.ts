@@ -45,6 +45,8 @@ const supabase = isSupabaseConfigured
   ? createClient(supabaseUrl ?? '', supabaseAnonKey ?? '')
   : null;
 
+export const supabaseClient = supabase;
+
 function numeric(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : 0;
 }

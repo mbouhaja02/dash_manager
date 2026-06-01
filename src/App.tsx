@@ -7,6 +7,7 @@ import {
   isSupabaseConfigured,
   loadAnalyses,
   summarize,
+  supabaseClient,
   worstRows,
 } from './dashboard';
 import { dashboardConfig } from './config';
@@ -25,11 +26,14 @@ function tone(row: AnalysisRow): string {
 export default function App() {
   const [rows, setRows] = useState<AnalysisRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
-  async function refresh() {
+  async function refresh(showLoading = false) {
     try {
-      setLoading(true);
+      if (showLoading) setLoading(true);
+      else setRefreshing(true);
       setError(null);
       const data = await loadAnalyses({
         storeName: dashboardConfig.storeName,
@@ -37,19 +41,41 @@ export default function App() {
         limit: dashboardConfig.limit,
       });
       setRows(data);
+      setLastUpdated(new Date());
     } catch (err: any) {
       setError(err?.message ?? 'Erreur de chargement Supabase.');
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   }
 
   useEffect(() => {
-    if (isSupabaseConfigured) void refresh();
-    else {
+    if (!isSupabaseConfigured) {
       setLoading(false);
       setError('Variables Supabase manquantes.');
+      return;
     }
+
+    void refresh(true);
+
+    const intervalId = window.setInterval(() => {
+      void refresh();
+    }, dashboardConfig.refreshMs);
+
+    const channel = supabaseClient
+      ?.channel('shelfguide-dashboard-live')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'shelfguide_analyses' },
+        () => void refresh(),
+      )
+      .subscribe();
+
+    return () => {
+      window.clearInterval(intervalId);
+      if (channel) void supabaseClient?.removeChannel(channel);
+    };
   }, []);
 
   const summary = useMemo(() => summarize(rows), [rows]);
@@ -66,9 +92,16 @@ export default function App() {
           <h1>{dashboardConfig.title}</h1>
           <p className="subtitle">{dashboardConfig.subtitle}</p>
         </div>
-        <button className="refresh" onClick={refresh} disabled={loading || !isSupabaseConfigured}>
-          Actualiser
-        </button>
+        <div className="actions">
+          <div className={`live-status ${error ? 'offline' : 'online'}`}>
+            <span />
+            <strong>{error ? 'Connexion a verifier' : refreshing ? 'Synchronisation...' : 'Live Supabase'}</strong>
+            <small>{lastUpdated ? `Mis a jour ${formatDate(lastUpdated.toISOString())}` : 'En attente'}</small>
+          </div>
+          <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
+            Actualiser
+          </button>
+        </div>
       </header>
 
       <section className="scope">

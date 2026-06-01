@@ -14,4 +14,5 @@ export const dashboardConfig = {
   riskTitle: 'Escalades magasin',
   recentTitle: 'Activite recente',
   limit: 500,
+  refreshMs: 15000,
 };
