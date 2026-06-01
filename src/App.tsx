@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import {
   AnalysisRow,
   average,
@@ -154,7 +155,7 @@ function buildShelfDecisions(rows: AnalysisRow[]): ShelfDecision[] {
     .sort((a, b) => b.priorityScore - a.priorityScore);
 }
 
-function buildTimeline(rows: AnalysisRow[]): TimelinePoint[] {
+function buildTimeline(rows: AnalysisRow[], maxPoints = 7): TimelinePoint[] {
   const buckets = new Map<string, AnalysisRow[]>();
 
   for (const row of rows) {
@@ -164,7 +165,7 @@ function buildTimeline(rows: AnalysisRow[]): TimelinePoint[] {
 
   return Array.from(buckets.entries())
     .sort(([a], [b]) => a.localeCompare(b))
-    .slice(-7)
+    .slice(-maxPoints)
     .map(([key, items], index, all) => {
       const anomalies = issueCount(items);
       const previous = index > 0 ? issueCount(all[index - 1][1]) : anomalies;
@@ -204,6 +205,58 @@ function buildRecurringIssues(rows: AnalysisRow[]): RecurringIssue[] {
 
 function isToday(value: string): boolean {
   return dayKey(value) === dayKey(new Date().toISOString());
+}
+
+function downloadCsv(filename: string, headers: string[], rows: (string | number)[][]): void {
+  const escape = (value: string | number) => {
+    const text = String(value ?? '');
+    return /[",\n;]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const csv = [headers, ...rows].map((row) => row.map(escape).join(';')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function toggleFullscreen(): void {
+  if (document.fullscreenElement) void document.exitFullscreen();
+  else void document.documentElement.requestFullscreen?.();
+}
+
+type Range = '7d' | '30d' | 'all';
+const RANGE_DAYS: Record<Range, number> = { '7d': 7, '30d': 30, all: 36500 };
+const RANGE_LABELS: Record<Range, string> = { '7d': '7 jours', '30d': '30 jours', all: 'Tout' };
+const DEFAULT_EMPTY = 10;
+const DEFAULT_BACK = 7;
+
+function scopeByRange(rows: AnalysisRow[], range: Range): AnalysisRow[] {
+  if (range === 'all') return rows;
+  const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
+  return rows.filter((row) => new Date(row.audit_date).getTime() >= cutoff);
+}
+
+function readParams() {
+  const p = new URLSearchParams(window.location.search);
+  const r = p.get('range');
+  return {
+    range: (r === '7d' || r === '30d' || r === 'all' ? r : 'all') as Range,
+    query: p.get('q') ?? '',
+    emptyTh: Number(p.get('empty')) || DEFAULT_EMPTY,
+    backTh: Number(p.get('back')) || DEFAULT_BACK,
+  };
+}
+
+function buildQuery(range: Range, query: string, emptyTh: number, backTh: number): string {
+  const p = new URLSearchParams();
+  if (range !== 'all') p.set('range', range);
+  if (query) p.set('q', query);
+  if (emptyTh !== DEFAULT_EMPTY) p.set('empty', String(emptyTh));
+  if (backTh !== DEFAULT_BACK) p.set('back', String(backTh));
+  return p.toString();
 }
 
 export default function App() {
@@ -261,10 +314,54 @@ export default function App() {
     };
   }, []);
 
-  const summary = useMemo(() => summarize(rows), [rows]);
-  const shelves = useMemo(() => buildShelfDecisions(rows), [rows]);
-  const timeline = useMemo(() => buildTimeline(rows), [rows]);
-  const recurringIssues = useMemo(() => buildRecurringIssues(rows), [rows]);
+  const initial = useRef(readParams()).current;
+  const [range, setRange] = useState<Range>(initial.range);
+  const [query, setQuery] = useState(initial.query);
+  const [emptyTh, setEmptyTh] = useState(initial.emptyTh);
+  const [backTh, setBackTh] = useState(initial.backTh);
+  const [panel, setPanel] = useState<null | 'settings' | 'share'>(null);
+  const [copied, setCopied] = useState(false);
+
+  const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
+  const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
+  const shelves = useMemo(() => buildShelfDecisions(scopedRows), [scopedRows]);
+  const timeline = useMemo(() => buildTimeline(scopedRows, range === '7d' ? 7 : 14), [scopedRows, range]);
+  const recurringIssues = useMemo(() => buildRecurringIssues(scopedRows), [scopedRows]);
+  const filteredShelves = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return shelves;
+    return shelves.filter((s) => `${s.shelf} ${s.category} ${s.store}`.toLowerCase().includes(q));
+  }, [shelves, query]);
+
+  const qs = buildQuery(range, query, emptyTh, backTh);
+  const snapshotUrl = `${window.location.origin}${window.location.pathname}${qs ? '?' + qs : ''}`;
+
+  useEffect(() => {
+    window.history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
+  }, [qs]);
+
+  useEffect(() => {
+    if (!copied) return;
+    const id = window.setTimeout(() => setCopied(false), 1800);
+    return () => window.clearTimeout(id);
+  }, [copied]);
+
+  function exportCsv() {
+    downloadCsv(
+      `shelfguide-rayons-${dayKey(new Date().toISOString())}.csv`,
+      ['Rayon', 'Categorie', 'Magasin', 'Statut', 'Vide %', 'Back-side %', 'Profitabilite %', 'Tendance pts', 'Priorite', 'Dernier audit', 'Audits'],
+      shelves.map((s) => [
+        s.shelf, s.category, s.store, s.status,
+        Math.round(s.emptyRatio), Math.round(s.backRatio), Math.round(s.profitability),
+        Math.round(s.trend), s.priority, formatDate(s.lastAudit), s.audits,
+      ]),
+    );
+  }
+
+  function copySnapshot() {
+    void navigator.clipboard?.writeText(snapshotUrl).then(() => setCopied(true));
+  }
+
   const priorityShelf = shelves[0];
   const criticalCount = shelves.filter((shelf) => shelf.status === 'Critique').length;
   const mediumCount = shelves.filter((shelf) => shelf.status === 'Moyen').length;
@@ -274,8 +371,8 @@ export default function App() {
   const openIssues = criticalCount + mediumCount;
   const latestTimeline = timeline[timeline.length - 1];
   const maxAnomalies = Math.max(1, ...timeline.map((point) => point.anomalies));
-  const visibleBreaks = shelves.filter((shelf) => shelf.emptyRatio >= 10).slice(0, 4);
-  const badOrientation = shelves.filter((shelf) => shelf.backRatio >= 7).slice(0, 4);
+  const visibleBreaks = shelves.filter((shelf) => shelf.emptyRatio >= emptyTh).slice(0, 4);
+  const badOrientation = shelves.filter((shelf) => shelf.backRatio >= backTh).slice(0, 4);
   const degrading = shelves.filter((shelf) => shelf.trend <= -4).slice(0, 4);
   const notAnalysedToday = shelves.filter((shelf) => !isToday(shelf.lastAudit)).slice(0, 4);
   const storeClean = summary.avgProfitability >= 85 && criticalCount === 0;
@@ -313,13 +410,48 @@ export default function App() {
             <p className="subtitle">Priorites terrain, performance commerciale et suivi des corrections.</p>
           </div>
           <div className="header-actions">
-            <div className="store-chip">
-              <span>Perimetre</span>
-              <strong>{dashboardConfig.storeName || 'Tous magasins'}</strong>
+            <div className="seg" role="group" aria-label="Periode d'analyse">
+              {(['7d', '30d', 'all'] as Range[]).map((r) => (
+                <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
+              ))}
+            </div>
+            <div className="tool-group">
+              <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} title="Reglages des seuils d'alerte">⚙</button>
+              <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les rayons en CSV">CSV</button>
+              <button className="tool-btn" onClick={() => window.print()} disabled={rows.length === 0} title="Generer un rapport PDF">PDF</button>
+              <button className="tool-btn" onClick={toggleFullscreen} title="Mode presentation plein ecran">⛶</button>
+              <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} title="Partager / QR code">⤴</button>
             </div>
             <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
               Actualiser
             </button>
+
+            {panel ? <div className="popover-backdrop" onClick={() => setPanel(null)} /> : null}
+            {panel === 'settings' ? (
+              <div className="popover">
+                <h3>Seuils d'alerte</h3>
+                <label className="field">
+                  <span>Vide critique <b>{emptyTh}%</b></span>
+                  <input type="range" min={3} max={30} value={emptyTh} onChange={(e) => setEmptyTh(Number(e.target.value))} />
+                </label>
+                <label className="field">
+                  <span>Back-side critique <b>{backTh}%</b></span>
+                  <input type="range" min={2} max={20} value={backTh} onChange={(e) => setBackTh(Number(e.target.value))} />
+                </label>
+                <button className="ghost-btn" onClick={() => { setEmptyTh(DEFAULT_EMPTY); setBackTh(DEFAULT_BACK); }}>Reinitialiser</button>
+              </div>
+            ) : null}
+            {panel === 'share' ? (
+              <div className="popover share">
+                <h3>Partager cette vue</h3>
+                <p>Scannez pour ouvrir sur mobile (filtres inclus)</p>
+                <div className="qr"><QRCodeSVG value={snapshotUrl} size={148} bgColor="#ffffff" fgColor="#111111" level="M" /></div>
+                <div className="share-url">
+                  <input readOnly value={snapshotUrl} onFocus={(e) => e.currentTarget.select()} />
+                  <button onClick={copySnapshot}>{copied ? 'Copie !' : 'Copier'}</button>
+                </div>
+              </div>
+            ) : null}
           </div>
         </header>
 
@@ -400,8 +532,18 @@ export default function App() {
 
             <section className="content-grid">
               <section className="panel table-panel" id="ranking">
-                <PanelTitle eyebrow="Priorisation" title="Classement des rayons a corriger" />
-                <ShelfTable shelves={shelves.slice(0, 12)} />
+                <div className="panel-head">
+                  <PanelTitle eyebrow="Priorisation" title="Classement des rayons a corriger" />
+                  <input
+                    className="search"
+                    type="search"
+                    placeholder="Rechercher un rayon, categorie..."
+                    value={query}
+                    onChange={(event) => setQuery(event.target.value)}
+                  />
+                </div>
+                <ShelfTable shelves={filteredShelves.slice(0, 12)} emptyTh={emptyTh} backTh={backTh} />
+                {filteredShelves.length === 0 ? <p className="muted">Aucun rayon ne correspond a la recherche.</p> : null}
               </section>
 
               <section className="panel decisions-panel">
@@ -510,7 +652,7 @@ function PanelTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
-function ShelfTable({ shelves }: { shelves: ShelfDecision[] }) {
+function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; emptyTh: number; backTh: number }) {
   return (
     <div className="table-wrap">
       <table>
@@ -534,10 +676,10 @@ function ShelfTable({ shelves }: { shelves: ShelfDecision[] }) {
               </td>
               <td><StatusBadge tone={toneFromStatus(shelf.status)} label={shelf.status} /></td>
               <td>
-                <RatioCell value={shelf.emptyRatio} tone={shelf.emptyRatio >= 10 ? 'danger' : shelf.emptyRatio >= 7 ? 'warning' : 'success'} />
+                <RatioCell value={shelf.emptyRatio} tone={shelf.emptyRatio >= emptyTh ? 'danger' : shelf.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success'} />
               </td>
               <td>
-                <RatioCell value={shelf.backRatio} tone={shelf.backRatio >= 7 ? 'warning' : 'success'} />
+                <RatioCell value={shelf.backRatio} tone={shelf.backRatio >= backTh ? 'warning' : 'success'} />
               </td>
               <td>
                 <RatioCell value={shelf.profitability} tone={toneFromStatus(shelf.status)} reverse />
@@ -705,9 +847,11 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
             </g>
           ) : null}
 
-          {points.map((p, i) => (
-            <text key={p.label} className="x-label" x={x(i)} y={H - 8}>{p.label}</text>
-          ))}
+          {points.map((p, i) =>
+            i % Math.ceil(points.length / 7) === 0 || i === points.length - 1 ? (
+              <text key={p.label} className="x-label" x={x(i)} y={H - 8}>{p.label}</text>
+            ) : null,
+          )}
 
           {points.map((_, i) => (
             <rect
@@ -744,11 +888,13 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
         ) : null}
       </div>
 
-      <div className="chart-foot">
-        {points.map((p) => (
-          <small key={p.label}>{pct(p.conformity)} · {p.corrected} corr.</small>
-        ))}
-      </div>
+      {points.length <= 8 ? (
+        <div className="chart-foot" style={{ gridTemplateColumns: `repeat(${points.length}, 1fr)` }}>
+          {points.map((p) => (
+            <small key={p.label}>{pct(p.conformity)} · {p.corrected} corr.</small>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
