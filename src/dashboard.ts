@@ -36,8 +36,16 @@ export interface DashboardGroup {
   lastAudit?: string;
 }
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL?.trim();
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY?.trim();
+const supabaseUrl = (
+  import.meta.env.VITE_SUPABASE_URL ??
+  import.meta.env.NEXT_PUBLIC_SUPABASE_URL
+)?.trim();
+const supabaseAnonKey = (
+  import.meta.env.VITE_SUPABASE_ANON_KEY ??
+  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
+  import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
+)?.trim();
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 
@@ -83,7 +91,7 @@ export async function loadAnalyses(options: {
   limit?: number;
 }): Promise<AnalysisRow[]> {
   if (!supabase) {
-    throw new Error('Missing VITE_SUPABASE_URL or VITE_SUPABASE_ANON_KEY.');
+    throw new Error('Variables Supabase manquantes: ajoute VITE_SUPABASE_URL et VITE_SUPABASE_PUBLISHABLE_KEY.');
   }
 
   let query = supabase
