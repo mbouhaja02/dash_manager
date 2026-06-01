@@ -10,6 +10,7 @@ import {
   supabaseClient,
 } from './dashboard';
 import { dashboardConfig } from './config';
+import { generateManagerReport } from './report';
 import './styles.css';
 
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
@@ -363,6 +364,30 @@ export default function App() {
   }
 
   const priorityShelf = shelves[0];
+
+  function exportPdf() {
+    generateManagerReport({
+      perimetre: dashboardConfig.storeName || 'Tous magasins',
+      periode: RANGE_LABELS[range],
+      summary: {
+        avgProfitability: summary.avgProfitability,
+        avgEmptyRatio: summary.avgEmptyRatio,
+        avgBackRatio: summary.avgBackRatio,
+        audits: summary.audits,
+      },
+      counts: { shelves: shelves.length, critical: criticalCount, medium: mediumCount, good: goodCount },
+      priorityShelf: priorityShelf
+        ? { shelf: priorityShelf.shelf, profitability: priorityShelf.profitability, emptyRatio: priorityShelf.emptyRatio, backRatio: priorityShelf.backRatio }
+        : undefined,
+      shelves: shelves.slice(0, 12).map((s) => ({
+        shelf: s.shelf, category: s.category, store: s.store, status: s.status,
+        emptyRatio: s.emptyRatio, backRatio: s.backRatio, profitability: s.profitability, trend: s.trend, priority: s.priority,
+      })),
+      recurring: recurringIssues.map((r) => ({ shelf: r.shelf, category: r.category, count: r.count })),
+      timeline: timeline.map((t) => ({ label: t.label, conformity: t.conformity })),
+      thresholds: { empty: emptyTh, back: backTh },
+    });
+  }
   const criticalCount = shelves.filter((shelf) => shelf.status === 'Critique').length;
   const mediumCount = shelves.filter((shelf) => shelf.status === 'Moyen').length;
   const goodCount = shelves.filter((shelf) => shelf.status === 'Bon').length;
@@ -418,7 +443,7 @@ export default function App() {
             <div className="tool-group">
               <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} title="Reglages des seuils d'alerte">⚙</button>
               <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les rayons en CSV">CSV</button>
-              <button className="tool-btn" onClick={() => window.print()} disabled={rows.length === 0} title="Generer un rapport PDF">PDF</button>
+              <button className="tool-btn" onClick={exportPdf} disabled={rows.length === 0} title="Generer un rapport PDF professionnel">PDF</button>
               <button className="tool-btn" onClick={toggleFullscreen} title="Mode presentation plein ecran">⛶</button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} title="Partager / QR code">⤴</button>
             </div>
