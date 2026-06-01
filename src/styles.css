@@ -104,7 +104,7 @@ a { color: inherit; text-decoration: none; }
   border: 1px solid var(--rule); border-radius: 3px; background: var(--card);
 }
 
-.page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 30px 32px; margin-bottom: 22px; border: 0; border-bottom: 2px solid var(--ink); background: transparent; border-radius: 0; animation: rise .5s var(--ease) both; }
+.page-header { position: relative; z-index: 40; display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; padding: 30px 32px; margin-bottom: 22px; border: 0; border-bottom: 2px solid var(--ink); background: transparent; border-radius: 0; animation: fade .5s var(--ease) both; }
 .eyebrow { margin: 0 0 12px; color: var(--vermilion); font-size: 11px; font-weight: 800; letter-spacing: .22em; text-transform: uppercase; }
 h1 { margin: 0; font-family: Fraunces, serif; font-size: 44px; font-weight: 600; letter-spacing: -.02em; line-height: 1; }
 .subtitle { margin: 14px 0 0; color: var(--ink-2); font-size: 15px; max-width: 56ch; line-height: 1.5; }
