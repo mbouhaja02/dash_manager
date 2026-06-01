@@ -324,7 +324,6 @@ export default function App() {
   const [backTh, setBackTh] = useState(initial.backTh);
   const [panel, setPanel] = useState<null | 'settings' | 'share'>(null);
   const [copied, setCopied] = useState(false);
-  const [demo, setDemo] = useState(false);
   const [boost, setBoost] = useState(5);
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
@@ -359,17 +358,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [panel]);
 
-  function toggleDemo() {
-    setPanel(null);
-    setDemo((d) => !d);
-    toggleFullscreen();
-  }
-
   const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
   const shelves = useMemo(() => buildShelfDecisions(scopedRows), [scopedRows]);
   const timeline = useMemo(() => buildTimeline(scopedRows, range === '7d' ? 7 : 14), [scopedRows, range]);
   const recurringIssues = useMemo(() => buildRecurringIssues(scopedRows), [scopedRows]);
+  const latestAudits = useMemo(
+    () => [...scopedRows]
+      .sort((a, b) => new Date(b.audit_date).getTime() - new Date(a.audit_date).getTime())
+      .slice(0, 6),
+    [scopedRows],
+  );
   const filteredShelves = useMemo(() => {
     const q = query.trim().toLowerCase();
     if (!q) return shelves;
@@ -437,6 +436,12 @@ export default function App() {
   const coverageToday = shelves.length > 0 ? (analysedToday / shelves.length) * 100 : 0;
   const openIssues = criticalCount + mediumCount;
   const latestTimeline = timeline[timeline.length - 1];
+  const auditsThisMonth = scopedRows.filter((row) => {
+    const audit = new Date(row.audit_date);
+    const now = new Date();
+    return audit.getMonth() === now.getMonth() && audit.getFullYear() === now.getFullYear();
+  }).length;
+  const actionsCorrected = latestTimeline?.corrected ?? 0;
   const maxAnomalies = Math.max(1, ...timeline.map((point) => point.anomalies));
   const visibleBreaks = shelves.filter((shelf) => shelf.emptyRatio >= emptyTh).slice(0, 4);
   const badOrientation = shelves.filter((shelf) => shelf.backRatio >= backTh).slice(0, 4);
@@ -453,9 +458,9 @@ export default function App() {
   return (
     <>
       {showSplash ? (
-        <Splash brand="ShelfGuide" sub={dashboardConfig.demoLocation} progress={splashProgress} onSkip={() => setShowSplash(false)} />
+        <Splash brand="ShelfGuide" sub={dashboardConfig.networkLabel} progress={splashProgress} onSkip={() => setShowSplash(false)} />
       ) : null}
-      <main className={`app-frame${demo ? ' demo' : ''}`}>
+      <main className="app-frame">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">SG</div>
@@ -469,6 +474,7 @@ export default function App() {
           <a className="active" href="#overview">Vue magasin</a>
           <a href="#ranking">Priorites rayons</a>
           <a href="#alerts">Alertes</a>
+          <a href="#audits">Derniers audits</a>
           <a href="#timeline">Evolution</a>
         </nav>
 
@@ -482,14 +488,11 @@ export default function App() {
       <section className="workspace">
         <header className="page-header" id="overview">
           <div>
-            <p className="eyebrow">Dashboard directeur magasin</p>
-            <h1>Etat operationnel des rayons</h1>
-            <p className="subtitle">Priorites terrain, performance commerciale et suivi des corrections.</p>
+            <p className="eyebrow">ShelfGuide retail intelligence</p>
+            <h1>Dashboard Manager</h1>
+            <p className="subtitle">Suivez les audits rayon, les anomalies et les actions prioritaires de votre magasin.</p>
           </div>
           <div className="header-actions">
-            <button className="demo-btn" onClick={toggleDemo} aria-pressed={demo} title="Mode presentation plein ecran">
-              {demo ? '✕ Quitter la demo' : '▶ Lancer la demo'}
-            </button>
             <div className="seg" role="group" aria-label="Periode d'analyse">
               {(['7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
@@ -601,25 +604,30 @@ export default function App() {
             </section>
 
             <section className="metric-grid">
-              <MetricCard label="Rayons analyses" value={String(shelves.length)} detail={`${summary.audits} audits`} />
+              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
               <MetricCard
-                label="Critiques"
+                label="Taux moyen de remplissage"
+                value={pct(summary.avgProfitability)}
+                detail="Score pondere magasin"
+                tone="success"
+              />
+              <MetricCard
+                label="Zones vides detectees"
+                value={String(summary.emptySpaces)}
+                detail={`${pct(summary.avgEmptyRatio)} de vide moyen`}
+                tone="warning"
+                sub={`~ ${formatMAD(ruptureCostDaily)} CA/jour`}
+              />
+              <MetricCard
+                label="Anomalies critiques"
                 value={String(criticalCount)}
                 detail={criticalCount > 0 ? 'Action immediate' : 'Tout est conforme'}
                 tone={criticalCount > 0 ? 'danger' : 'success'}
                 pulse={criticalCount > 0}
               />
-              <MetricCard label="Moyens" value={String(mediumCount)} detail="A corriger" tone="warning" />
-              <MetricCard label="Bons" value={String(goodCount)} detail="Conformes" tone="success" />
-              <MetricCard
-                label="Vide moyen"
-                value={pct(summary.avgEmptyRatio)}
-                detail={`${summary.emptySpaces} facings vides`}
-                tone="warning"
-                sub={`≈ ${formatMAD(ruptureCostDaily)} CA/jour`}
-              />
-              <MetricCard label="Back-side moyen" value={pct(summary.avgBackRatio)} detail={`${summary.backProducts} produits`} />
-              <MetricCard label="Profitabilite" value={pct(summary.avgProfitability)} detail="Ponderee magasin" tone="success" />
+              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" />
+              <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} />
+              <MetricCard label="Produits mal orientes" value={String(summary.backProducts)} detail={`${pct(summary.avgBackRatio)} back-side moyen`} />
             </section>
 
             <BusinessBand
@@ -628,13 +636,13 @@ export default function App() {
               hoursSaved={hoursSaved}
               boost={boost}
               onBoost={setBoost}
-              location={dashboardConfig.demoLocation}
+              location={dashboardConfig.networkLabel}
             />
 
             <section className="content-grid">
               <section className="panel table-panel" id="ranking">
                 <div className="panel-head">
-                  <PanelTitle eyebrow="Priorisation" title="Classement des rayons a corriger" />
+                  <PanelTitle eyebrow="Performance rayon" title="Rayons les plus problematiques" />
                   <input
                     className="search"
                     type="search"
@@ -648,7 +656,7 @@ export default function App() {
               </section>
 
               <section className="panel decisions-panel">
-                <PanelTitle eyebrow="Decision" title="Ce que le manager doit faire" />
+                <PanelTitle eyebrow="Decision" title="Synthese operationnelle" />
                 <DecisionStack
                   items={[
                     ['Rayon prioritaire', priorityShelf?.shelf ?? 'Aucun rayon'],
@@ -660,13 +668,28 @@ export default function App() {
               </section>
 
               <section className="panel alerts-panel" id="alerts">
-                <PanelTitle eyebrow="Alertes" title="Risques ouverts" />
+                <PanelTitle eyebrow="Alertes prioritaires" title="Anomalies a traiter" />
                 <AlertStack
                   visibleBreaks={visibleBreaks}
                   badOrientation={badOrientation}
                   degrading={degrading}
                   notAnalysedToday={notAnalysedToday}
                 />
+              </section>
+
+              <section className="panel recommendations-panel">
+                <PanelTitle eyebrow="Actions recommandees" title="Plan terrain" />
+                <RecommendationList
+                  priorityShelf={priorityShelf}
+                  visibleBreaks={visibleBreaks}
+                  badOrientation={badOrientation}
+                  degrading={degrading}
+                />
+              </section>
+
+              <section className="panel audits-panel" id="audits">
+                <PanelTitle eyebrow="Derniers audits" title="Activite recente" />
+                <RecentAuditList rows={latestAudits} />
               </section>
 
               <section className="panel timeline-panel" id="timeline">
@@ -929,6 +952,61 @@ function AlertStack({
   );
 }
 
+function RecommendationList({
+  priorityShelf,
+  visibleBreaks,
+  badOrientation,
+  degrading,
+}: {
+  priorityShelf?: ShelfDecision;
+  visibleBreaks: ShelfDecision[];
+  badOrientation: ShelfDecision[];
+  degrading: ShelfDecision[];
+}) {
+  const items = [
+    priorityShelf ? `Reapprovisionner ${priorityShelf.shelf} et verifier le stock reserve.` : 'Maintenir la cadence de controle rayon.',
+    visibleBreaks.length > 0 ? `Traiter ${visibleBreaks.length} rayon(s) avec zones vides detectees.` : 'Aucune rupture visible au-dessus du seuil.',
+    badOrientation.length > 0 ? `Corriger le facing sur ${badOrientation.length} rayon(s) avec produits back-side.` : 'Facing globalement conforme.',
+    degrading.length > 0 ? `Relancer un audit apres correction sur ${degrading.length} rayon(s) en baisse.` : 'Tendance magasin stable.',
+  ];
+
+  return (
+    <div className="recommendation-list">
+      {items.map((item, index) => (
+        <div key={item} className="recommendation-item">
+          <span>{String(index + 1).padStart(2, '0')}</span>
+          <p>{item}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RecentAuditList({ rows }: { rows: AnalysisRow[] }) {
+  if (rows.length === 0) return <p className="muted">Aucun audit recent disponible.</p>;
+
+  return (
+    <div className="audit-list">
+      {rows.map((row) => {
+        const status = statusFrom(row);
+        return (
+          <div className="audit-row" key={row.id}>
+            <div>
+              <strong>{row.shelf_name}</strong>
+              <small>{row.store_name} - {formatDate(row.audit_date)}</small>
+            </div>
+            <div className="audit-metrics">
+              <span>{pct(row.weighted_profitability_percent)}</span>
+              <span>{row.empty_spaces + row.back_products} anomalies</span>
+              <StatusBadge tone={toneFromStatus(status)} label={status} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomalies: number }) {
   const [active, setActive] = useState<number | null>(null);
   if (points.length === 0) return <p className="muted">Pas encore assez de donnees temporelles.</p>;
@@ -976,12 +1054,12 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
         >
           <defs>
             <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(214, 73, 47, .22)" />
-              <stop offset="100%" stopColor="rgba(214, 73, 47, 0)" />
+              <stop offset="0%" stopColor="rgba(17, 191, 210, .18)" />
+              <stop offset="100%" stopColor="rgba(17, 191, 210, 0)" />
             </linearGradient>
             <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#d6492f" />
-              <stop offset="100%" stopColor="#b5371f" />
+              <stop offset="0%" stopColor="#11bfd2" />
+              <stop offset="100%" stopColor="#078da0" />
             </linearGradient>
           </defs>
 
@@ -1043,11 +1121,11 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
           >
             <b>{hovered.label}</b>
             <div className="tt-row">
-              <span><i style={{ background: '#d6492f' }} />Conformite</span>
+              <span><i style={{ background: '#11bfd2' }} />Conformite</span>
               <strong>{pct(hovered.conformity)}</strong>
             </div>
             <div className="tt-row">
-              <span><i style={{ background: '#1c1a17' }} />Anomalies</span>
+              <span><i style={{ background: '#f59e0b' }} />Anomalies</span>
               <strong>{hovered.anomalies}</strong>
             </div>
             <div className="tt-row">
