@@ -664,12 +664,12 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
         >
           <defs>
             <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(99, 102, 241, .3)" />
-              <stop offset="100%" stopColor="rgba(99, 102, 241, 0)" />
+              <stop offset="0%" stopColor="rgba(214, 73, 47, .22)" />
+              <stop offset="100%" stopColor="rgba(214, 73, 47, 0)" />
             </linearGradient>
             <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#6366f1" />
-              <stop offset="100%" stopColor="#8b5cf6" />
+              <stop offset="0%" stopColor="#d6492f" />
+              <stop offset="100%" stopColor="#b5371f" />
             </linearGradient>
           </defs>
 
@@ -729,11 +729,11 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
           >
             <b>{hovered.label}</b>
             <div className="tt-row">
-              <span><i style={{ background: 'linear-gradient(90deg,#6366f1,#8b5cf6)' }} />Conformite</span>
+              <span><i style={{ background: '#d6492f' }} />Conformite</span>
               <strong>{pct(hovered.conformity)}</strong>
             </div>
             <div className="tt-row">
-              <span><i style={{ background: '#f59e0b' }} />Anomalies</span>
+              <span><i style={{ background: '#1c1a17' }} />Anomalies</span>
               <strong>{hovered.anomalies}</strong>
             </div>
             <div className="tt-row">
