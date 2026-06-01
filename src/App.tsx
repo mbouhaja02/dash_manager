@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   AnalysisRow,
   average,
@@ -12,18 +12,24 @@ import { dashboardConfig } from './config';
 import './styles.css';
 
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
+type Tone = 'danger' | 'warning' | 'success' | 'primary';
 
 interface ShelfDecision {
+  key: string;
+  store: string;
   shelf: string;
   category: string;
   status: string;
   emptyRatio: number;
   backRatio: number;
   profitability: number;
+  emptySpaces: number;
+  backProducts: number;
   priority: Priority;
   priorityScore: number;
   trend: number;
   lastAudit: string;
+  audits: number;
 }
 
 interface TimelinePoint {
@@ -33,20 +39,20 @@ interface TimelinePoint {
   corrected: number;
 }
 
+interface RecurringIssue {
+  key: string;
+  shelf: string;
+  category: string;
+  count: number;
+  profitability: number;
+}
+
 function pct(value: number): string {
   return `${Math.round(value)}%`;
 }
 
-function statusTone(status: string): string {
-  if (status === 'Critique') return 'danger';
-  if (status === 'Moyen') return 'warning';
-  return 'success';
-}
-
-function priorityTone(priority: Priority): string {
-  if (priority === 'Haute') return 'danger';
-  if (priority === 'Moyenne') return 'warning';
-  return 'success';
+function clamp(value: number, min = 0, max = 100): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 function dayKey(value: string): string {
@@ -57,15 +63,27 @@ function shortDay(value: string): string {
   return new Intl.DateTimeFormat('fr-FR', { day: '2-digit', month: 'short' }).format(new Date(value));
 }
 
-function getStatus(row: AnalysisRow): string {
-  if (row.status === 'Critique' || row.weighted_profitability_percent < 65) return 'Critique';
+function statusFrom(row: AnalysisRow): string {
+  if (row.status === 'Critique' || row.severity === 'high' || row.weighted_profitability_percent < 65) return 'Critique';
   if (row.status === 'Moyen' || row.weighted_profitability_percent < 85) return 'Moyen';
   return 'Bon';
 }
 
-function getPriority(row: AnalysisRow, trend: number): Priority {
+function toneFromStatus(status: string): Tone {
+  if (status === 'Critique') return 'danger';
+  if (status === 'Moyen') return 'warning';
+  return 'success';
+}
+
+function toneFromPriority(priority: Priority): Tone {
+  if (priority === 'Haute') return 'danger';
+  if (priority === 'Moyenne') return 'warning';
+  return 'success';
+}
+
+function priorityFrom(row: AnalysisRow, trend: number): Priority {
   if (
-    getStatus(row) === 'Critique' ||
+    statusFrom(row) === 'Critique' ||
     row.empty_ratio_percent >= 15 ||
     row.back_ratio_percent >= 10 ||
     row.weighted_profitability_percent < 70 ||
@@ -73,7 +91,7 @@ function getPriority(row: AnalysisRow, trend: number): Priority {
   ) return 'Haute';
 
   if (
-    getStatus(row) === 'Moyen' ||
+    statusFrom(row) === 'Moyen' ||
     row.empty_ratio_percent >= 7 ||
     row.back_ratio_percent >= 5 ||
     row.weighted_profitability_percent < 85 ||
@@ -83,39 +101,54 @@ function getPriority(row: AnalysisRow, trend: number): Priority {
   return 'Faible';
 }
 
+function trendLabel(value: number): string {
+  if (Math.abs(value) < 1) return 'Stable';
+  return `${value > 0 ? '+' : ''}${Math.round(value)} pts`;
+}
+
+function issueCount(rows: AnalysisRow[]): number {
+  return rows.reduce((sum, row) => sum + row.empty_spaces + row.back_products, 0);
+}
+
 function buildShelfDecisions(rows: AnalysisRow[]): ShelfDecision[] {
   const buckets = new Map<string, AnalysisRow[]>();
 
   for (const row of rows) {
-    buckets.set(row.shelf_name, [...(buckets.get(row.shelf_name) ?? []), row]);
+    const key = `${row.store_name}__${row.shelf_name}`;
+    buckets.set(key, [...(buckets.get(key) ?? []), row]);
   }
 
   return Array.from(buckets.entries())
-    .map(([shelf, items]) => {
+    .map(([key, items]) => {
       const sorted = [...items].sort((a, b) => new Date(b.audit_date).getTime() - new Date(a.audit_date).getTime());
       const latest = sorted[0];
       const previous = sorted[1];
       const trend = previous
         ? latest.weighted_profitability_percent - previous.weighted_profitability_percent
         : 0;
-      const priority = getPriority(latest, trend);
+      const priority = priorityFrom(latest, trend);
       const priorityScore =
         (100 - latest.weighted_profitability_percent) +
-        latest.empty_ratio_percent * 1.6 +
+        latest.empty_ratio_percent * 1.5 +
         latest.back_ratio_percent * 1.2 +
         (trend < 0 ? Math.abs(trend) * 2 : 0);
 
       return {
-        shelf,
+        key,
+        store: latest.store_name,
+        shelf: latest.shelf_name,
         category: latest.category,
-        status: getStatus(latest),
+        status: statusFrom(latest),
         emptyRatio: latest.empty_ratio_percent,
         backRatio: latest.back_ratio_percent,
         profitability: latest.weighted_profitability_percent,
+        emptySpaces: latest.empty_spaces,
+        backProducts: latest.back_products,
         priority,
         priorityScore,
         trend,
         lastAudit: latest.audit_date,
+        audits: sorted.length,
       };
     })
     .sort((a, b) => b.priorityScore - a.priorityScore);
@@ -133,17 +166,40 @@ function buildTimeline(rows: AnalysisRow[]): TimelinePoint[] {
     .sort(([a], [b]) => a.localeCompare(b))
     .slice(-7)
     .map(([key, items], index, all) => {
-      const anomalies = items.filter((item) => getStatus(item) !== 'Bon').length;
-      const previousItems = index > 0 ? all[index - 1][1] : [];
-      const previousAnomalies = previousItems.filter((item) => getStatus(item) !== 'Bon').length;
+      const anomalies = issueCount(items);
+      const previous = index > 0 ? issueCount(all[index - 1][1]) : anomalies;
 
       return {
         label: shortDay(key),
         conformity: average(items.map((item) => item.weighted_profitability_percent)),
         anomalies,
-        corrected: Math.max(0, previousAnomalies - anomalies),
+        corrected: Math.max(0, previous - anomalies),
       };
     });
+}
+
+function buildRecurringIssues(rows: AnalysisRow[]): RecurringIssue[] {
+  const buckets = new Map<string, AnalysisRow[]>();
+
+  for (const row of rows) {
+    const key = `${row.store_name}__${row.shelf_name}`;
+    if (statusFrom(row) === 'Bon' && row.empty_ratio_percent < 7 && row.back_ratio_percent < 5) continue;
+    buckets.set(key, [...(buckets.get(key) ?? []), row]);
+  }
+
+  return Array.from(buckets.entries())
+    .map(([key, items]) => {
+      const sorted = [...items].sort((a, b) => new Date(b.audit_date).getTime() - new Date(a.audit_date).getTime());
+      return {
+        key,
+        shelf: sorted[0].shelf_name,
+        category: sorted[0].category,
+        count: items.length,
+        profitability: average(items.map((item) => item.weighted_profitability_percent)),
+      };
+    })
+    .sort((a, b) => b.count - a.count || a.profitability - b.profitability)
+    .slice(0, 5);
 }
 
 function isToday(value: string): boolean {
@@ -169,8 +225,8 @@ export default function App() {
       });
       setRows(data);
       setLastUpdated(new Date());
-    } catch (err: any) {
-      setError(err?.message ?? 'Erreur de chargement Supabase.');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Erreur de chargement Supabase.');
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -208,136 +264,215 @@ export default function App() {
   const summary = useMemo(() => summarize(rows), [rows]);
   const shelves = useMemo(() => buildShelfDecisions(rows), [rows]);
   const timeline = useMemo(() => buildTimeline(rows), [rows]);
+  const recurringIssues = useMemo(() => buildRecurringIssues(rows), [rows]);
   const priorityShelf = shelves[0];
   const criticalCount = shelves.filter((shelf) => shelf.status === 'Critique').length;
   const mediumCount = shelves.filter((shelf) => shelf.status === 'Moyen').length;
   const goodCount = shelves.filter((shelf) => shelf.status === 'Bon').length;
+  const analysedToday = shelves.filter((shelf) => isToday(shelf.lastAudit)).length;
+  const coverageToday = shelves.length > 0 ? (analysedToday / shelves.length) * 100 : 0;
+  const openIssues = criticalCount + mediumCount;
+  const latestTimeline = timeline[timeline.length - 1];
+  const maxAnomalies = Math.max(1, ...timeline.map((point) => point.anomalies));
   const visibleBreaks = shelves.filter((shelf) => shelf.emptyRatio >= 10).slice(0, 4);
   const badOrientation = shelves.filter((shelf) => shelf.backRatio >= 7).slice(0, 4);
   const degrading = shelves.filter((shelf) => shelf.trend <= -4).slice(0, 4);
   const notAnalysedToday = shelves.filter((shelf) => !isToday(shelf.lastAudit)).slice(0, 4);
-  const recurringIssues = shelves.filter((shelf) => shelf.priority !== 'Faible').slice(0, 5);
-  const maxAnomalies = Math.max(...timeline.map((point) => point.anomalies), 1);
-  const latestTimeline = timeline[timeline.length - 1];
+  const storeClean = summary.avgProfitability >= 85 && criticalCount === 0;
 
   return (
-    <main className="shell">
-      <header className="hero">
-        <div>
-          <p className="eyebrow">{dashboardConfig.eyebrow}</p>
-          <h1>Dashboard Manager Magasin</h1>
-          <p className="subtitle">Pilotage live des rayons, alertes terrain et priorites commerciales.</p>
-        </div>
-        <div className="actions">
-          <div className={`live-status ${error ? 'offline' : 'online'}`}>
-            <span />
-            <strong>{error ? 'Connexion a verifier' : refreshing ? 'Synchronisation...' : 'Live Supabase'}</strong>
-            <small>{lastUpdated ? `Mis a jour ${formatDate(lastUpdated.toISOString())}` : 'En attente'}</small>
+    <main className="app-frame">
+      <aside className="sidebar">
+        <div className="brand">
+          <div className="brand-mark">SG</div>
+          <div>
+            <strong>ShelfGuide</strong>
+            <span>Manager cockpit</span>
           </div>
-          <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
-            Actualiser
-          </button>
         </div>
-      </header>
 
-      {error ? <div className="notice">{error}</div> : null}
-      {loading ? <div className="notice">Chargement des resultats...</div> : null}
+        <nav className="side-nav" aria-label="Navigation dashboard">
+          <a className="active" href="#overview">Vue magasin</a>
+          <a href="#ranking">Priorites rayons</a>
+          <a href="#alerts">Alertes</a>
+          <a href="#timeline">Evolution</a>
+        </nav>
 
-      {!loading && rows.length === 0 && !error ? (
-        <div className="empty">Aucune analyse disponible pour ce perimetre.</div>
-      ) : null}
+        <div className={`sync-card ${error ? 'offline' : 'online'}`}>
+          <span className="sync-dot" />
+          <strong>{error ? 'Connexion a verifier' : refreshing ? 'Synchronisation' : 'Supabase live'}</strong>
+          <small>{lastUpdated ? formatDate(lastUpdated.toISOString()) : 'En attente'}</small>
+        </div>
+      </aside>
 
-      {rows.length > 0 ? (
-        <>
-          <section className="decision-strip">
-            <article className="score-card">
-              <span>Score global conformite</span>
-              <strong>{pct(summary.avgProfitability)}</strong>
-              <div className="score-track">
-                <i style={{ width: `${Math.min(100, Math.max(0, summary.avgProfitability))}%` }} />
-              </div>
-              <small>{summary.avgProfitability >= 85 ? 'Magasin propre' : 'Plan de correction requis'}</small>
-            </article>
-            <article className="priority-card">
-              <span>Rayon prioritaire</span>
-              <strong>{priorityShelf?.shelf ?? 'N/A'}</strong>
-              <small>
-                {priorityShelf
-                  ? `${pct(priorityShelf.profitability)} profitabilite - ${pct(priorityShelf.emptyRatio)} vide`
-                  : 'Aucun rayon analyse'}
-              </small>
-            </article>
-            <article className="scope-card">
+      <section className="workspace">
+        <header className="page-header" id="overview">
+          <div>
+            <p className="eyebrow">Dashboard directeur magasin</p>
+            <h1>Etat operationnel des rayons</h1>
+            <p className="subtitle">Priorites terrain, performance commerciale et suivi des corrections.</p>
+          </div>
+          <div className="header-actions">
+            <div className="store-chip">
               <span>Perimetre</span>
               <strong>{dashboardConfig.storeName || 'Tous magasins'}</strong>
-              <small>Source Supabase / shelfguide_analyses</small>
-            </article>
-          </section>
+            </div>
+            <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
+              Actualiser
+            </button>
+          </div>
+        </header>
 
-          <section className="kpis">
-            <Kpi label="Rayons analyses" value={String(shelves.length)} />
-            <Kpi label="Rayons critiques" value={String(criticalCount)} tone="danger" />
-            <Kpi label="Rayons moyens" value={String(mediumCount)} tone="warning" />
-            <Kpi label="Rayons bons" value={String(goodCount)} tone="success" />
-            <Kpi label="Vide moyen" value={pct(summary.avgEmptyRatio)} tone="warning" />
-            <Kpi label="Back-side moyen" value={pct(summary.avgBackRatio)} />
-            <Kpi label="Profitabilite ponderee" value={pct(summary.avgProfitability)} tone="success" />
-          </section>
+        {error ? <div className="notice danger">{error}</div> : null}
+        {loading ? <div className="notice">Chargement des analyses Supabase...</div> : null}
 
-          <section className="manager-grid">
-            <Panel title="Classement des rayons" wide>
-              <ShelfTable shelves={shelves.slice(0, 10)} />
-            </Panel>
+        {!loading && rows.length === 0 && !error ? (
+          <div className="empty">Aucune analyse disponible pour ce perimetre.</div>
+        ) : null}
 
-            <Panel title="Decision attendue">
-              <DecisionList
-                items={[
-                  ['Priorite immediate', priorityShelf?.shelf ?? 'Aucun rayon'],
-                  ['Etat magasin', summary.avgProfitability >= 85 ? 'Globalement propre' : 'A surveiller'],
-                  ['Correction equipe', latestTimeline?.corrected ? `${latestTimeline.corrected} anomalies corrigees` : 'A confirmer'],
-                  ['Perte commerciale', priorityShelf ? `${priorityShelf.shelf} impacte la performance` : 'N/A'],
-                ]}
-              />
-            </Panel>
+        {rows.length > 0 ? (
+          <>
+            <section className="command-grid">
+              <article className="command-card score-card">
+                <div className="section-heading">
+                  <span>Score global conformite</span>
+                  <StatusBadge tone={storeClean ? 'success' : 'warning'} label={storeClean ? 'Magasin propre' : 'Plan action'} />
+                </div>
+                <div className="score-layout">
+                  <div>
+                    <strong className="score-value">{pct(summary.avgProfitability)}</strong>
+                    <p>
+                      {storeClean
+                        ? 'La surface est globalement maitrisee.'
+                        : `${openIssues} rayons demandent une verification terrain.`}
+                    </p>
+                  </div>
+                  <div
+                    className="score-ring"
+                    style={{ '--score': `${clamp(summary.avgProfitability)}%` } as CSSProperties}
+                  >
+                    <span>{pct(summary.avgProfitability)}</span>
+                  </div>
+                </div>
+              </article>
 
-            <Panel title="Alertes magasin" wide>
-              <Alerts
-                visibleBreaks={visibleBreaks}
-                badOrientation={badOrientation}
-                degrading={degrading}
-                notAnalysedToday={notAnalysedToday}
-              />
-            </Panel>
+              <article className="command-card priority-card">
+                <div className="section-heading">
+                  <span>Rayon prioritaire</span>
+                  <StatusBadge tone={priorityShelf ? toneFromPriority(priorityShelf.priority) : 'primary'} label={priorityShelf?.priority ?? 'N/A'} />
+                </div>
+                <strong className="priority-title">{priorityShelf?.shelf ?? 'Aucun rayon'}</strong>
+                <p>
+                  {priorityShelf
+                    ? `${pct(priorityShelf.emptyRatio)} vide, ${pct(priorityShelf.backRatio)} back-side, ${pct(priorityShelf.profitability)} profitabilite.`
+                    : 'Aucune priorite detectee.'}
+                </p>
+                {priorityShelf ? (
+                  <div className="mini-metrics">
+                    <span>Impact commercial</span>
+                    <strong>{pct(100 - priorityShelf.profitability)} de perte potentielle</strong>
+                  </div>
+                ) : null}
+              </article>
 
-            <Panel title="Evolution temporelle" wide>
-              <Timeline points={timeline} maxAnomalies={maxAnomalies} />
-            </Panel>
+              <article className="command-card execution-card">
+                <div className="section-heading">
+                  <span>Execution equipe</span>
+                  <StatusBadge tone={coverageToday >= 80 ? 'success' : 'warning'} label={`${pct(coverageToday)} aujourd'hui`} />
+                </div>
+                <strong className="priority-title">{latestTimeline?.corrected ?? 0} anomalies corrigees</strong>
+                <p>Couverture du jour: {analysedToday}/{shelves.length} rayons analyses.</p>
+                <div className="progress-line">
+                  <i style={{ width: `${clamp(coverageToday)}%` }} />
+                </div>
+              </article>
+            </section>
 
-            <Panel title="Rayons recurrents en probleme">
-              <RecurringList shelves={recurringIssues} />
-            </Panel>
-          </section>
-        </>
-      ) : null}
+            <section className="metric-grid">
+              <MetricCard label="Rayons analyses" value={String(shelves.length)} detail={`${summary.audits} audits`} />
+              <MetricCard label="Critiques" value={String(criticalCount)} detail="Action immediate" tone="danger" />
+              <MetricCard label="Moyens" value={String(mediumCount)} detail="A corriger" tone="warning" />
+              <MetricCard label="Bons" value={String(goodCount)} detail="Conformes" tone="success" />
+              <MetricCard label="Vide moyen" value={pct(summary.avgEmptyRatio)} detail={`${summary.emptySpaces} facings vides`} tone="warning" />
+              <MetricCard label="Back-side moyen" value={pct(summary.avgBackRatio)} detail={`${summary.backProducts} produits`} />
+              <MetricCard label="Profitabilite" value={pct(summary.avgProfitability)} detail="Ponderee magasin" tone="success" />
+            </section>
+
+            <section className="content-grid">
+              <section className="panel table-panel" id="ranking">
+                <PanelTitle eyebrow="Priorisation" title="Classement des rayons a corriger" />
+                <ShelfTable shelves={shelves.slice(0, 12)} />
+              </section>
+
+              <section className="panel decisions-panel">
+                <PanelTitle eyebrow="Decision" title="Ce que le manager doit faire" />
+                <DecisionStack
+                  items={[
+                    ['Rayon prioritaire', priorityShelf?.shelf ?? 'Aucun rayon'],
+                    ['Etat du magasin', storeClean ? 'Globalement propre' : 'Correction requise'],
+                    ['Equipe terrain', coverageToday >= 80 ? 'Tour du jour avance' : 'Tour incomplet'],
+                    ['Performance perdue', priorityShelf ? `${priorityShelf.shelf} a traiter` : 'Non detectee'],
+                  ]}
+                />
+              </section>
+
+              <section className="panel alerts-panel" id="alerts">
+                <PanelTitle eyebrow="Alertes" title="Risques ouverts" />
+                <AlertStack
+                  visibleBreaks={visibleBreaks}
+                  badOrientation={badOrientation}
+                  degrading={degrading}
+                  notAnalysedToday={notAnalysedToday}
+                />
+              </section>
+
+              <section className="panel timeline-panel" id="timeline">
+                <PanelTitle eyebrow="Evolution" title="Conformite et anomalies corrigees" />
+                <Timeline points={timeline} maxAnomalies={maxAnomalies} />
+              </section>
+
+              <section className="panel recurring-panel">
+                <PanelTitle eyebrow="Recurrence" title="Rayons qui reviennent en probleme" />
+                <RecurringList issues={recurringIssues} />
+              </section>
+            </section>
+          </>
+        ) : null}
+      </section>
     </main>
   );
 }
 
-function Kpi({ label, value, tone = 'primary' }: { label: string; value: string; tone?: string }) {
+function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
+  return <span className={`status-badge ${tone}`}>{label}</span>;
+}
+
+function MetricCard({
+  label,
+  value,
+  detail,
+  tone = 'primary',
+}: {
+  label: string;
+  value: string;
+  detail: string;
+  tone?: Tone;
+}) {
   return (
-    <article className={`kpi ${tone}`}>
+    <article className={`metric-card ${tone}`}>
       <span>{label}</span>
       <strong>{value}</strong>
+      <small>{detail}</small>
     </article>
   );
 }
 
-function Panel({ title, children, wide = false }: { title: string; children: React.ReactNode; wide?: boolean }) {
+function PanelTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   return (
-    <section className={`panel ${wide ? 'wide' : ''}`}>
+    <div className="panel-title">
+      <span>{eyebrow}</span>
       <h2>{title}</h2>
-      {children}
-    </section>
+    </div>
   );
 }
 
@@ -350,23 +485,31 @@ function ShelfTable({ shelves }: { shelves: ShelfDecision[] }) {
             <th>Rayon</th>
             <th>Statut</th>
             <th>Empty ratio</th>
-            <th>Back/side ratio</th>
+            <th>Back-side</th>
             <th>Profitabilite</th>
+            <th>Tendance</th>
             <th>Priorite</th>
           </tr>
         </thead>
         <tbody>
           {shelves.map((shelf) => (
-            <tr key={shelf.shelf}>
+            <tr key={shelf.key}>
               <td>
                 <strong>{shelf.shelf}</strong>
-                <small>{shelf.category}</small>
+                <small>{shelf.category} - {shelf.store}</small>
               </td>
-              <td><span className={`pill ${statusTone(shelf.status)}`}>{shelf.status}</span></td>
-              <td>{pct(shelf.emptyRatio)}</td>
-              <td>{pct(shelf.backRatio)}</td>
-              <td>{pct(shelf.profitability)}</td>
-              <td><span className={`pill ${priorityTone(shelf.priority)}`}>{shelf.priority}</span></td>
+              <td><StatusBadge tone={toneFromStatus(shelf.status)} label={shelf.status} /></td>
+              <td>
+                <RatioCell value={shelf.emptyRatio} tone={shelf.emptyRatio >= 10 ? 'danger' : shelf.emptyRatio >= 7 ? 'warning' : 'success'} />
+              </td>
+              <td>
+                <RatioCell value={shelf.backRatio} tone={shelf.backRatio >= 7 ? 'warning' : 'success'} />
+              </td>
+              <td>
+                <RatioCell value={shelf.profitability} tone={toneFromStatus(shelf.status)} reverse />
+              </td>
+              <td className={shelf.trend < -1 ? 'trend-down' : shelf.trend > 1 ? 'trend-up' : ''}>{trendLabel(shelf.trend)}</td>
+              <td><StatusBadge tone={toneFromPriority(shelf.priority)} label={shelf.priority} /></td>
             </tr>
           ))}
         </tbody>
@@ -375,9 +518,22 @@ function ShelfTable({ shelves }: { shelves: ShelfDecision[] }) {
   );
 }
 
-function DecisionList({ items }: { items: [string, string][] }) {
+function RatioCell({ value, tone, reverse = false }: { value: number; tone: Tone; reverse?: boolean }) {
+  const width = reverse ? clamp(value) : clamp(value * 4);
+
   return (
-    <div className="decision-list">
+    <div className="ratio-cell">
+      <span>{pct(value)}</span>
+      <div className={`ratio-track ${tone}`}>
+        <i style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function DecisionStack({ items }: { items: [string, string][] }) {
+  return (
+    <div className="decision-stack">
       {items.map(([label, value]) => (
         <div key={label}>
           <span>{label}</span>
@@ -388,7 +544,7 @@ function DecisionList({ items }: { items: [string, string][] }) {
   );
 }
 
-function Alerts({
+function AlertStack({
   visibleBreaks,
   badOrientation,
   degrading,
@@ -399,33 +555,28 @@ function Alerts({
   degrading: ShelfDecision[];
   notAnalysedToday: ShelfDecision[];
 }) {
-  return (
-    <div className="alerts-grid">
-      <AlertColumn title="Rupture visible" shelves={visibleBreaks} metric={(shelf) => pct(shelf.emptyRatio)} />
-      <AlertColumn title="Produits mal orientes" shelves={badOrientation} metric={(shelf) => pct(shelf.backRatio)} />
-      <AlertColumn title="Rayons en degradation" shelves={degrading} metric={(shelf) => `${Math.round(shelf.trend)} pts`} />
-      <AlertColumn title="Non analyses aujourd'hui" shelves={notAnalysedToday} metric={(shelf) => formatDate(shelf.lastAudit)} />
-    </div>
-  );
-}
+  const sections = [
+    { title: 'Rupture visible', rows: visibleBreaks, metric: (shelf: ShelfDecision) => `${pct(shelf.emptyRatio)} vide` },
+    { title: 'Mal orientes', rows: badOrientation, metric: (shelf: ShelfDecision) => `${pct(shelf.backRatio)} back-side` },
+    { title: 'En degradation', rows: degrading, metric: (shelf: ShelfDecision) => trendLabel(shelf.trend) },
+    { title: 'Non analyses', rows: notAnalysedToday, metric: (shelf: ShelfDecision) => formatDate(shelf.lastAudit) },
+  ];
 
-function AlertColumn({
-  title,
-  shelves,
-  metric,
-}: {
-  title: string;
-  shelves: ShelfDecision[];
-  metric: (shelf: ShelfDecision) => string;
-}) {
   return (
-    <div className="alert-column">
-      <h3>{title}</h3>
-      {shelves.length === 0 ? <p>Aucune alerte</p> : null}
-      {shelves.map((shelf) => (
-        <div className="alert-row" key={`${title}-${shelf.shelf}`}>
-          <strong>{shelf.shelf}</strong>
-          <span>{metric(shelf)}</span>
+    <div className="alert-stack">
+      {sections.map((section) => (
+        <div className="alert-section" key={section.title}>
+          <div className="alert-section-title">
+            <strong>{section.title}</strong>
+            <span>{section.rows.length}</span>
+          </div>
+          {section.rows.length === 0 ? <p>Aucune alerte active</p> : null}
+          {section.rows.map((shelf) => (
+            <div className="alert-row" key={`${section.title}-${shelf.key}`}>
+              <span>{shelf.shelf}</span>
+              <strong>{section.metric(shelf)}</strong>
+            </div>
+          ))}
         </div>
       ))}
     </div>
@@ -433,29 +584,43 @@ function AlertColumn({
 }
 
 function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomalies: number }) {
+  if (points.length === 0) return <p className="muted">Pas encore assez de donnees temporelles.</p>;
+
   return (
     <div className="timeline">
-      {points.map((point) => (
-        <div className="timeline-day" key={point.label}>
-          <div className="timeline-bars">
-            <span style={{ height: `${Math.max(10, point.conformity)}%` }} />
-            <i style={{ height: `${Math.max(8, (point.anomalies / maxAnomalies) * 100)}%` }} />
+      <div className="timeline-legend">
+        <span><i className="legend-compliance" /> Conformite</span>
+        <span><i className="legend-anomaly" /> Anomalies</span>
+      </div>
+      <div className="timeline-bars">
+        {points.map((point) => (
+          <div className="timeline-day" key={point.label}>
+            <div className="bar-stage">
+              <span style={{ height: `${clamp(point.conformity, 8, 100)}%` }} />
+              <i style={{ height: `${clamp((point.anomalies / maxAnomalies) * 100, 8, 100)}%` }} />
+            </div>
+            <strong>{point.label}</strong>
+            <small>{pct(point.conformity)} - {point.corrected} corr.</small>
           </div>
-          <strong>{point.label}</strong>
-          <small>{pct(point.conformity)} / {point.corrected} corr.</small>
-        </div>
-      ))}
+        ))}
+      </div>
     </div>
   );
 }
 
-function RecurringList({ shelves }: { shelves: ShelfDecision[] }) {
+function RecurringList({ issues }: { issues: RecurringIssue[] }) {
+  if (issues.length === 0) return <p className="muted">Aucun rayon recurrent en probleme.</p>;
+
   return (
     <div className="recurring-list">
-      {shelves.map((shelf) => (
-        <div key={shelf.shelf}>
-          <strong>{shelf.shelf}</strong>
-          <span>{shelf.priority} - {pct(shelf.profitability)}</span>
+      {issues.map((issue, index) => (
+        <div key={issue.key}>
+          <span>{String(index + 1).padStart(2, '0')}</span>
+          <div>
+            <strong>{issue.shelf}</strong>
+            <small>{issue.category}</small>
+          </div>
+          <em>{issue.count} fois</em>
         </div>
       ))}
     </div>
