@@ -355,3 +355,44 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) { * { animation-duration: .01ms !important; transition-duration: .01ms !important; } }
+
+/* ============================================================
+   Splash · mode demo · valorisation business (demo Franprix)
+   ============================================================ */
+.splash {
+  position: fixed; inset: 0; z-index: 100; display: grid; place-items: center;
+  background: var(--paper); cursor: pointer; animation: fade .4s var(--ease) both;
+}
+.splash-inner { display: flex; flex-direction: column; align-items: center; gap: 14px; text-align: center; padding: 0 24px; }
+.splash-mark { font-family: Fraunces, serif; font-weight: 900; font-size: clamp(46px, 9vw, 88px); letter-spacing: -.03em; color: var(--ink); animation: rise .6s var(--ease) both; }
+.splash-sub { margin: 0; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; font-size: 12px; color: var(--vermilion); }
+.splash-bar { width: min(280px, 70vw); height: 3px; background: var(--rule); border-radius: 99px; overflow: hidden; }
+.splash-bar i { display: block; height: 100%; background: var(--vermilion); transition: width .25s linear; }
+.splash-hint { font-size: 11.5px; color: var(--ink-3); letter-spacing: .03em; }
+
+.demo-btn {
+  padding: 10px 16px; border-radius: 3px; border: 1px solid var(--ink);
+  background: var(--ink); color: var(--card); font-weight: 700; font-size: 13px;
+  cursor: pointer; transition: transform .15s var(--ease), background .2s var(--ease), border-color .2s var(--ease);
+}
+.demo-btn:hover { background: var(--vermilion); border-color: var(--vermilion); transform: translateY(-1px); }
+.demo-btn[aria-pressed="true"] { background: var(--vermilion); border-color: var(--vermilion); }
+.app-frame.demo .tool-group, .app-frame.demo .search { display: none; }
+
+.metric-sub { margin-top: 4px !important; color: var(--vermilion) !important; font-weight: 700 !important; }
+.metric-card.pulse > span { display: flex; align-items: center; }
+.live-dot { width: 8px; height: 8px; margin-left: 7px; border-radius: 50%; background: var(--danger); animation: halo 1.4s ease-in-out infinite; }
+@keyframes halo { 0%, 100% { box-shadow: 0 0 0 0 rgba(192,57,43,.5); opacity: 1; } 50% { box-shadow: 0 0 0 6px rgba(192,57,43,0); opacity: .55; } }
+
+.business-band { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; margin-bottom: 22px; }
+.biz-card { position: relative; padding: 20px; background: var(--card); border: 1px solid var(--rule); border-radius: 3px; animation: fade .5s var(--ease) both; }
+.biz-label { font-size: 11px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-3); }
+.biz-value { display: block; margin-top: 12px; font-family: Fraunces, serif; font-size: 32px; font-weight: 600; letter-spacing: -.02em; line-height: 1; }
+.biz-value.accent { color: var(--vermilion); }
+.biz-card small { display: block; margin-top: 8px; color: var(--ink-2); font-size: 12px; }
+.biz-sim-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.est-badge { font-size: 9.5px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; padding: 3px 7px; border-radius: 99px; background: var(--vermilion-soft); color: var(--vermilion-2); }
+.biz-slider { width: 100%; margin-top: 14px; accent-color: var(--vermilion); cursor: pointer; }
+
+@media (max-width: 1080px) { .business-band { grid-template-columns: 1fr; } }
+@media print { .splash, .demo-btn, .business-band { display: none !important; } }

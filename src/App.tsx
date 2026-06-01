@@ -4,6 +4,8 @@ import {
   AnalysisRow,
   average,
   formatDate,
+  formatHours,
+  formatMAD,
   isSupabaseConfigured,
   loadAnalyses,
   summarize,
@@ -322,6 +324,46 @@ export default function App() {
   const [backTh, setBackTh] = useState(initial.backTh);
   const [panel, setPanel] = useState<null | 'settings' | 'share'>(null);
   const [copied, setCopied] = useState(false);
+  const [demo, setDemo] = useState(false);
+  const [boost, setBoost] = useState(5);
+  const [showSplash, setShowSplash] = useState(true);
+  const [splashProgress, setSplashProgress] = useState(8);
+
+  // Splash : barre de progression au premier chargement uniquement
+  useEffect(() => {
+    if (!showSplash) return;
+    const start = performance.now();
+    let raf = 0;
+    const tick = () => {
+      const t = (performance.now() - start) / 1400;
+      setSplashProgress((p) => Math.max(p, Math.min(92, 8 + t * 84)));
+      if (t < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    const safety = window.setTimeout(() => setShowSplash(false), 2600);
+    return () => { cancelAnimationFrame(raf); window.clearTimeout(safety); };
+  }, [showSplash]);
+
+  useEffect(() => {
+    if (loading || !showSplash) return;
+    setSplashProgress(100);
+    const id = window.setTimeout(() => setShowSplash(false), 420);
+    return () => window.clearTimeout(id);
+  }, [loading, showSplash]);
+
+  // Echap ferme les popovers
+  useEffect(() => {
+    if (!panel) return;
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setPanel(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [panel]);
+
+  function toggleDemo() {
+    setPanel(null);
+    setDemo((d) => !d);
+    toggleFullscreen();
+  }
 
   const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
@@ -402,8 +444,18 @@ export default function App() {
   const notAnalysedToday = shelves.filter((shelf) => !isToday(shelf.lastAudit)).slice(0, 4);
   const storeClean = summary.avgProfitability >= 85 && criticalCount === 0;
 
+  // Valorisation business (hypotheses ajustables dans config.ts)
+  const ruptureCostDaily = summary.emptySpaces * dashboardConfig.costPerFacing;
+  const hoursSaved = (summary.audits * dashboardConfig.minPerManualAudit) / 60;
+  const conformityGap = Math.max(1, 100 - summary.avgProfitability);
+  const recovered = ruptureCostDaily * (Math.min(boost, conformityGap) / conformityGap);
+
   return (
-    <main className="app-frame">
+    <>
+      {showSplash ? (
+        <Splash brand="ShelfGuide" sub={dashboardConfig.demoLocation} progress={splashProgress} onSkip={() => setShowSplash(false)} />
+      ) : null}
+      <main className={`app-frame${demo ? ' demo' : ''}`}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">SG</div>
@@ -435,17 +487,20 @@ export default function App() {
             <p className="subtitle">Priorites terrain, performance commerciale et suivi des corrections.</p>
           </div>
           <div className="header-actions">
+            <button className="demo-btn" onClick={toggleDemo} aria-pressed={demo} title="Mode presentation plein ecran">
+              {demo ? '✕ Quitter la demo' : '▶ Lancer la demo'}
+            </button>
             <div className="seg" role="group" aria-label="Periode d'analyse">
               {(['7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
               ))}
             </div>
             <div className="tool-group">
-              <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} title="Reglages des seuils d'alerte">⚙</button>
+              <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} aria-label="Reglages des seuils d'alerte" title="Reglages des seuils d'alerte">⚙</button>
               <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les rayons en CSV">CSV</button>
               <button className="tool-btn" onClick={exportPdf} disabled={rows.length === 0} title="Generer un rapport PDF professionnel">PDF</button>
-              <button className="tool-btn" onClick={toggleFullscreen} title="Mode presentation plein ecran">⛶</button>
-              <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} title="Partager / QR code">⤴</button>
+              <button className="tool-btn" onClick={toggleFullscreen} aria-label="Plein ecran" title="Mode presentation plein ecran">⛶</button>
+              <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} aria-label="Partager / QR code" title="Partager / QR code">⤴</button>
             </div>
             <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
               Actualiser
@@ -547,13 +602,34 @@ export default function App() {
 
             <section className="metric-grid">
               <MetricCard label="Rayons analyses" value={String(shelves.length)} detail={`${summary.audits} audits`} />
-              <MetricCard label="Critiques" value={String(criticalCount)} detail="Action immediate" tone="danger" />
+              <MetricCard
+                label="Critiques"
+                value={String(criticalCount)}
+                detail={criticalCount > 0 ? 'Action immediate' : 'Tout est conforme'}
+                tone={criticalCount > 0 ? 'danger' : 'success'}
+                pulse={criticalCount > 0}
+              />
               <MetricCard label="Moyens" value={String(mediumCount)} detail="A corriger" tone="warning" />
               <MetricCard label="Bons" value={String(goodCount)} detail="Conformes" tone="success" />
-              <MetricCard label="Vide moyen" value={pct(summary.avgEmptyRatio)} detail={`${summary.emptySpaces} facings vides`} tone="warning" />
+              <MetricCard
+                label="Vide moyen"
+                value={pct(summary.avgEmptyRatio)}
+                detail={`${summary.emptySpaces} facings vides`}
+                tone="warning"
+                sub={`≈ ${formatMAD(ruptureCostDaily)} CA/jour`}
+              />
               <MetricCard label="Back-side moyen" value={pct(summary.avgBackRatio)} detail={`${summary.backProducts} produits`} />
               <MetricCard label="Profitabilite" value={pct(summary.avgProfitability)} detail="Ponderee magasin" tone="success" />
             </section>
+
+            <BusinessBand
+              ruptureCostDaily={ruptureCostDaily}
+              recovered={recovered}
+              hoursSaved={hoursSaved}
+              boost={boost}
+              onBoost={setBoost}
+              location={dashboardConfig.demoLocation}
+            />
 
             <section className="content-grid">
               <section className="panel table-panel" id="ranking">
@@ -606,7 +682,21 @@ export default function App() {
           </>
         ) : null}
       </section>
-    </main>
+      </main>
+    </>
+  );
+}
+
+function Splash({ brand, sub, progress, onSkip }: { brand: string; sub: string; progress: number; onSkip: () => void }) {
+  return (
+    <div className="splash" onClick={onSkip} role="button" tabIndex={0} aria-label="Passer l'introduction">
+      <div className="splash-inner">
+        <div className="splash-mark">{brand}</div>
+        <p className="splash-sub">{sub}</p>
+        <div className="splash-bar"><i style={{ width: `${progress}%` }} /></div>
+        <span className="splash-hint">Chargement des analyses…</span>
+      </div>
+    </div>
   );
 }
 
@@ -653,18 +743,73 @@ function MetricCard({
   value,
   detail,
   tone = 'primary',
+  pulse = false,
+  sub,
 }: {
   label: string;
   value: string;
   detail: string;
   tone?: Tone;
+  pulse?: boolean;
+  sub?: string;
 }) {
   return (
-    <article className={`metric-card ${tone}`}>
-      <span>{label}</span>
+    <article className={`metric-card ${tone}${pulse ? ' pulse' : ''}`}>
+      <span>{label}{pulse ? <i className="live-dot" aria-hidden="true" /> : null}</span>
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
+      {sub ? <small className="metric-sub">{sub}</small> : null}
     </article>
+  );
+}
+
+function BusinessBand({
+  ruptureCostDaily,
+  recovered,
+  hoursSaved,
+  boost,
+  onBoost,
+  location,
+}: {
+  ruptureCostDaily: number;
+  recovered: number;
+  hoursSaved: number;
+  boost: number;
+  onBoost: (value: number) => void;
+  location: string;
+}) {
+  return (
+    <section className="business-band" aria-label="Valorisation business">
+      <article className="biz-card">
+        <span className="biz-label">Cout estime des ruptures</span>
+        <strong className="biz-value">{formatMAD(ruptureCostDaily)}</strong>
+        <small>CA potentiel perdu / jour · {location}</small>
+      </article>
+
+      <article className="biz-card biz-sim">
+        <div className="biz-sim-head">
+          <span className="biz-label">Et si +{boost} pts de conformite ?</span>
+          <span className="est-badge">estimation</span>
+        </div>
+        <strong className="biz-value accent">{formatMAD(recovered)}</strong>
+        <small>CA recuperable / jour (simulation)</small>
+        <input
+          className="biz-slider"
+          type="range"
+          min={0}
+          max={20}
+          value={boost}
+          onChange={(event) => onBoost(Number(event.target.value))}
+          aria-label="Gain de conformite simule en points"
+        />
+      </article>
+
+      <article className="biz-card">
+        <span className="biz-label">Temps gagne vs audit manuel</span>
+        <strong className="biz-value"><CountUp value={formatHours(hoursSaved)} /></strong>
+        <small>economise sur la periode analysee</small>
+      </article>
+    </section>
   );
 }
 
