@@ -36,16 +36,18 @@ export interface DashboardGroup {
   lastAudit?: string;
 }
 
+const env = import.meta.env as unknown as Record<string, string | undefined>;
+
 const supabaseUrl = (
-  import.meta.env.VITE_SUPABASE_URL ??
-  import.meta.env.NEXT_PUBLIC_SUPABASE_URL ??
+  env.VITE_SUPABASE_URL ??
+  env.NEXT_PUBLIC_SUPABASE_URL ??
   'https://moucagzxoucxytgoamgl.supabase.co'
 )?.trim();
 const supabaseAnonKey = (
-  import.meta.env.VITE_SUPABASE_ANON_KEY ??
-  import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ??
-  import.meta.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
-  import.meta.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
+  env.VITE_SUPABASE_ANON_KEY ??
+  env.VITE_SUPABASE_PUBLISHABLE_KEY ??
+  env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ??
+  env.NEXT_PUBLIC_SUPABASE_ANON_KEY ??
   'sb_publishable_J3uWerqtMwpC9YjA9zC-6g_G1QCBigL'
 )?.trim();
 
