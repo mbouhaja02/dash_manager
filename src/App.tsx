@@ -17,6 +17,7 @@ import './styles.css';
 
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
 type Tone = 'danger' | 'warning' | 'success' | 'primary';
+type Theme = 'light' | 'dark';
 
 interface ShelfDecision {
   key: string;
@@ -49,6 +50,13 @@ interface RecurringIssue {
   category: string;
   count: number;
   profitability: number;
+}
+
+interface ActivityItem {
+  avatar: string;
+  title: string;
+  meta: string;
+  tone: Tone;
 }
 
 function pct(value: number): string {
@@ -236,6 +244,14 @@ const RANGE_LABELS: Record<Range, string> = { '7d': '7 jours', '30d': '30 jours'
 const DEFAULT_EMPTY = 10;
 const DEFAULT_BACK = 7;
 
+function readTheme(): Theme {
+  try {
+    return window.localStorage.getItem('shelfguide-theme') === 'dark' ? 'dark' : 'light';
+  } catch {
+    return 'light';
+  }
+}
+
 function scopeByRange(rows: AnalysisRow[], range: Range): AnalysisRow[] {
   if (range === 'all') return rows;
   const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
@@ -327,6 +343,8 @@ export default function App() {
   const [boost, setBoost] = useState(5);
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
+  const [theme, setTheme] = useState<Theme>(readTheme);
+  const quickSearchRef = useRef<HTMLInputElement>(null);
 
   // Splash : barre de progression au premier chargement uniquement
   useEffect(() => {
@@ -357,6 +375,26 @@ export default function App() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [panel]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      window.localStorage.setItem('shelfguide-theme', theme);
+    } catch {
+      // Storage can be unavailable in restricted embeds.
+    }
+  }, [theme]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        quickSearchRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
@@ -448,6 +486,34 @@ export default function App() {
   const degrading = shelves.filter((shelf) => shelf.trend <= -4).slice(0, 4);
   const notAnalysedToday = shelves.filter((shelf) => !isToday(shelf.lastAudit)).slice(0, 4);
   const storeClean = summary.avgProfitability >= 85 && criticalCount === 0;
+  const alertCount = criticalCount + visibleBreaks.length + badOrientation.length;
+  const activityItems: ActivityItem[] = [
+    priorityShelf
+      ? {
+          avatar: 'MG',
+          title: `${priorityShelf.shelf} a traiter en premier`,
+          meta: `${priorityShelf.category} - ${formatDate(priorityShelf.lastAudit)}`,
+          tone: toneFromPriority(priorityShelf.priority),
+        }
+      : {
+          avatar: 'OK',
+          title: 'Aucun rayon prioritaire',
+          meta: 'Magasin stable sur la periode',
+          tone: 'success',
+        },
+    {
+      avatar: 'EQ',
+      title: `${analysedToday}/${shelves.length} rayons controles aujourd'hui`,
+      meta: coverageToday >= 80 ? 'Tour equipe bien avance' : 'Tour equipe a relancer',
+      tone: coverageToday >= 80 ? 'success' : 'warning',
+    },
+    {
+      avatar: 'AI',
+      title: `${actionsCorrected} anomalies corrigees`,
+      meta: `${openIssues} points restent ouverts`,
+      tone: openIssues > 0 ? 'warning' : 'success',
+    },
+  ];
 
   // Valorisation business (hypotheses ajustables dans config.ts)
   const ruptureCostDaily = summary.emptySpaces * dashboardConfig.costPerFacing;
@@ -493,17 +559,35 @@ export default function App() {
             <p className="subtitle">Suivez les audits rayon, les anomalies et les actions prioritaires de votre magasin.</p>
           </div>
           <div className="header-actions">
+            <label className="quick-search" aria-label="Recherche rapide">
+              <span>Search</span>
+              <input
+                ref={quickSearchRef}
+                type="search"
+                placeholder="Rayon, categorie..."
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+              <kbd>Ctrl K</kbd>
+            </label>
             <div className="seg" role="group" aria-label="Periode d'analyse">
               {(['7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
               ))}
             </div>
             <div className="tool-group">
+              <button className="tool-btn notify-btn" title="Notifications magasin" aria-label={`${alertCount} notifications magasin`}>
+                <span className="notify-dot" aria-hidden="true" />
+                {alertCount}
+              </button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'settings' ? null : 'settings')} aria-label="Reglages des seuils d'alerte" title="Reglages des seuils d'alerte">⚙</button>
               <button className="tool-btn" onClick={exportCsv} disabled={rows.length === 0} title="Exporter les rayons en CSV">CSV</button>
               <button className="tool-btn" onClick={exportPdf} disabled={rows.length === 0} title="Generer un rapport PDF professionnel">PDF</button>
               <button className="tool-btn" onClick={toggleFullscreen} aria-label="Plein ecran" title="Mode presentation plein ecran">⛶</button>
               <button className="tool-btn" onClick={() => setPanel(panel === 'share' ? null : 'share')} aria-label="Partager / QR code" title="Partager / QR code">⤴</button>
+              <button className="tool-btn theme-toggle" onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} aria-label="Changer le theme" title="Changer le theme">
+                {theme === 'dark' ? 'Light' : 'Dark'}
+              </button>
             </div>
             <button className="refresh" onClick={() => void refresh()} disabled={loading || !isSupabaseConfigured}>
               Actualiser
@@ -539,7 +623,7 @@ export default function App() {
         </header>
 
         {error ? <div className="notice danger">{error}</div> : null}
-        {loading ? <div className="notice">Chargement des analyses Supabase...</div> : null}
+        {loading ? <DashboardSkeleton label="Chargement des analyses magasin..." /> : null}
 
         {!loading && rows.length === 0 && !error ? (
           <div className="empty">Aucune analyse disponible pour ce perimetre.</div>
@@ -610,6 +694,7 @@ export default function App() {
                 value={pct(summary.avgProfitability)}
                 detail="Score pondere magasin"
                 tone="success"
+                spark={timeline.map((point) => point.conformity)}
               />
               <MetricCard
                 label="Zones vides detectees"
@@ -617,6 +702,7 @@ export default function App() {
                 detail={`${pct(summary.avgEmptyRatio)} de vide moyen`}
                 tone="warning"
                 sub={`~ ${formatMAD(ruptureCostDaily)} CA/jour`}
+                spark={timeline.map((point) => 100 - point.conformity)}
               />
               <MetricCard
                 label="Anomalies critiques"
@@ -624,8 +710,9 @@ export default function App() {
                 detail={criticalCount > 0 ? 'Action immediate' : 'Tout est conforme'}
                 tone={criticalCount > 0 ? 'danger' : 'success'}
                 pulse={criticalCount > 0}
+                spark={timeline.map((point) => point.anomalies)}
               />
-              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" />
+              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" spark={timeline.map((point) => point.corrected)} />
               <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} />
               <MetricCard label="Produits mal orientes" value={String(summary.backProducts)} detail={`${pct(summary.avgBackRatio)} back-side moyen`} />
             </section>
@@ -687,6 +774,22 @@ export default function App() {
                 />
               </section>
 
+              <section className="panel activity-panel">
+                <PanelTitle eyebrow="Activite magasin" title="Derniers signaux utiles" />
+                <ActivityFeed items={activityItems} />
+              </section>
+
+              <section className="panel action-center-panel">
+                <PanelTitle eyebrow="Pilotage equipe" title="Rythme du jour" />
+                <ActionCenter
+                  items={[
+                    ['Controle', `${analysedToday}/${shelves.length} rayons lus`],
+                    ['Priorite', priorityShelf?.shelf ?? 'Aucun rayon critique'],
+                    ['Validation', openIssues > 0 ? 'Corriger puis relancer audit' : 'Conserver cadence'],
+                  ]}
+                />
+              </section>
+
               <section className="panel audits-panel" id="audits">
                 <PanelTitle eyebrow="Derniers audits" title="Activite recente" />
                 <RecentAuditList rows={latestAudits} />
@@ -720,6 +823,17 @@ function Splash({ brand, sub, progress, onSkip }: { brand: string; sub: string; 
         <span className="splash-hint">Chargement des analyses…</span>
       </div>
     </div>
+  );
+}
+
+function DashboardSkeleton({ label }: { label: string }) {
+  return (
+    <section className="skeleton-shell" aria-label={label}>
+      <span>{label}</span>
+      <div className="skeleton-grid">
+        {Array.from({ length: 7 }).map((_, index) => <i key={index} />)}
+      </div>
+    </section>
   );
 }
 
@@ -761,6 +875,31 @@ function StatusBadge({ tone, label }: { tone: Tone; label: string }) {
   return <span className={`status-badge ${tone}`}>{label}</span>;
 }
 
+function Sparkline({ values }: { values: number[] }) {
+  const clean = values.filter((value) => Number.isFinite(value));
+  const series = clean.length >= 2
+    ? clean
+    : clean.length === 1
+      ? [clean[0] * 0.86, clean[0], clean[0] * 0.94]
+      : [18, 34, 26, 42];
+  const min = Math.min(...series);
+  const max = Math.max(...series);
+  const range = Math.max(1, max - min);
+  const points = series
+    .map((value, index) => {
+      const x = (index / (series.length - 1)) * 100;
+      const y = 30 - ((value - min) / range) * 24;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+
+  return (
+    <svg className="sparkline" viewBox="0 0 100 32" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={points} />
+    </svg>
+  );
+}
+
 function MetricCard({
   label,
   value,
@@ -768,6 +907,7 @@ function MetricCard({
   tone = 'primary',
   pulse = false,
   sub,
+  spark,
 }: {
   label: string;
   value: string;
@@ -775,6 +915,7 @@ function MetricCard({
   tone?: Tone;
   pulse?: boolean;
   sub?: string;
+  spark?: number[];
 }) {
   return (
     <article className={`metric-card ${tone}${pulse ? ' pulse' : ''}`}>
@@ -782,6 +923,7 @@ function MetricCard({
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
       {sub ? <small className="metric-sub">{sub}</small> : null}
+      {spark ? <Sparkline values={spark} /> : null}
     </article>
   );
 }
@@ -907,6 +1049,38 @@ function DecisionStack({ items }: { items: [string, string][] }) {
         <div key={label}>
           <span>{label}</span>
           <strong>{value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActivityFeed({ items }: { items: ActivityItem[] }) {
+  return (
+    <div className="activity-feed">
+      {items.map((item) => (
+        <div className="activity-item" key={`${item.avatar}-${item.title}`}>
+          <span className={`activity-avatar ${item.tone}`}>{item.avatar}</span>
+          <div>
+            <strong>{item.title}</strong>
+            <small>{item.meta}</small>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ActionCenter({ items }: { items: [string, string][] }) {
+  return (
+    <div className="action-center">
+      {items.map(([label, value], index) => (
+        <div key={label} className="action-center-row">
+          <span>{String(index + 1).padStart(2, '0')}</span>
+          <div>
+            <small>{label}</small>
+            <strong>{value}</strong>
+          </div>
         </div>
       ))}
     </div>
