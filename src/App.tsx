@@ -249,9 +249,10 @@ const DEFAULT_BACK = 7;
 
 function readTheme(): Theme {
   try {
-    return window.localStorage.getItem('shelfguide-theme') === 'dark' ? 'dark' : 'light';
+    const stored = window.localStorage.getItem('shelfguide-theme-v2');
+    return stored === 'light' ? 'light' : 'dark';
   } catch {
-    return 'light';
+    return 'dark';
   }
 }
 
@@ -386,7 +387,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     try {
-      window.localStorage.setItem('shelfguide-theme', theme);
+      window.localStorage.setItem('shelfguide-theme-v2', theme);
     } catch {
       // Storage can be unavailable in restricted embeds.
     }
@@ -542,6 +543,18 @@ export default function App() {
   const hoursSaved = (summary.audits * dashboardConfig.minPerManualAudit) / 60;
   const conformityGap = Math.max(1, 100 - summary.avgProfitability);
   const recovered = ruptureCostDaily * (Math.min(boost, conformityGap) / conformityGap);
+  const hasActiveFilters =
+    query.trim().length > 0 ||
+    selectedStore !== 'all' ||
+    selectedStatus !== 'all' ||
+    selectedIssue !== 'all';
+
+  function resetFilters() {
+    setQuery('');
+    setSelectedStore('all');
+    setSelectedStatus('all');
+    setSelectedIssue('all');
+  }
 
   return (
     <>
@@ -648,13 +661,18 @@ export default function App() {
         {loading ? <DashboardSkeleton label="Chargement des analyses magasin..." /> : null}
 
         {!loading && rows.length === 0 && !error ? (
-          <div className="empty">Aucune analyse disponible pour ce perimetre.</div>
+          <EmptyState
+            title="Aucun audit trouve pour ce magasin"
+            detail="ShelfGuide est connecte a Supabase, mais aucun audit ne correspond au perimetre actuel."
+            actionLabel="Reinitialiser les filtres"
+            onAction={resetFilters}
+          />
         ) : null}
 
         {rows.length > 0 ? (
           <>
-            <section className="command-grid">
-              <article className="command-card score-card">
+            <section className="command-grid manager-command-grid">
+              <article className="command-card score-card store-health-card">
                 <div className="section-heading">
                   <span>Score global conformite</span>
                   <StatusBadge tone={storeClean ? 'success' : 'warning'} label={storeClean ? 'Magasin propre' : 'Plan action'} />
@@ -677,7 +695,7 @@ export default function App() {
                 </div>
               </article>
 
-              <article className="command-card priority-card">
+              <article className="command-card priority-card priority-shelf-card">
                 <div className="section-heading">
                   <span>Rayon prioritaire</span>
                   <StatusBadge tone={priorityShelf ? toneFromPriority(priorityShelf.priority) : 'primary'} label={priorityShelf?.priority ?? 'N/A'} />
@@ -696,7 +714,7 @@ export default function App() {
                 ) : null}
               </article>
 
-              <article className="command-card execution-card">
+              <article className="command-card execution-card team-execution-card">
                 <div className="section-heading">
                   <span>Execution equipe</span>
                   <StatusBadge tone={coverageToday >= 80 ? 'success' : 'warning'} label={`${pct(coverageToday)} aujourd'hui`} />
@@ -718,16 +736,19 @@ export default function App() {
               onStore={setSelectedStore}
               onStatus={setSelectedStatus}
               onIssue={setSelectedIssue}
+              active={hasActiveFilters}
+              onReset={resetFilters}
             />
 
             <section className="metric-grid">
-              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
+              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} variant="operational" />
               <MetricCard
                 label="Taux moyen de remplissage"
                 value={pct(avgFillRate)}
                 detail="Facings remplis"
                 tone="success"
                 spark={timeline.map((point) => point.conformity)}
+                variant="primary"
               />
               <MetricCard
                 label="Zones vides detectees"
@@ -736,6 +757,7 @@ export default function App() {
                 tone="warning"
                 sub={`~ ${formatMAD(ruptureCostDaily)} CA/jour`}
                 spark={timeline.map((point) => 100 - point.conformity)}
+                variant="risk"
               />
               <MetricCard
                 label="Anomalies critiques"
@@ -744,10 +766,11 @@ export default function App() {
                 tone={criticalCount > 0 ? 'danger' : 'success'}
                 pulse={criticalCount > 0}
                 spark={timeline.map((point) => point.anomalies)}
+                variant="risk"
               />
-              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" spark={timeline.map((point) => point.corrected)} />
-              <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} />
-              <MetricCard label="Produits mal orientes" value={String(summary.backProducts)} detail={`${pct(summary.avgBackRatio)} back-side moyen`} />
+              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" spark={timeline.map((point) => point.corrected)} variant="progress" />
+              <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} variant="operational" />
+              <MetricCard label="Produits mal orientes" value={String(summary.backProducts)} detail={`${pct(summary.avgBackRatio)} back-side moyen`} variant="operational" />
             </section>
 
             <BusinessBand
@@ -771,8 +794,7 @@ export default function App() {
                     onChange={(event) => setQuery(event.target.value)}
                   />
                 </div>
-                <ShelfTable shelves={filteredShelves.slice(0, 12)} emptyTh={emptyTh} backTh={backTh} />
-                {filteredShelves.length === 0 ? <p className="muted">Aucun rayon ne correspond a la recherche.</p> : null}
+                <ShelfTable shelves={filteredShelves.slice(0, 12)} emptyTh={emptyTh} backTh={backTh} onReset={resetFilters} />
               </section>
 
               <section className="panel decisions-panel">
@@ -785,6 +807,7 @@ export default function App() {
                     ['Performance perdue', priorityShelf ? `${priorityShelf.shelf} a traiter` : 'Non detectee'],
                   ]}
                 />
+                <StoreHealthBreakdown good={goodCount} medium={mediumCount} critical={criticalCount} />
               </section>
 
               <section className="panel alerts-panel" id="alerts">
@@ -795,6 +818,7 @@ export default function App() {
                   degrading={degrading}
                   notAnalysedToday={notAnalysedToday}
                 />
+                <ShelfRiskBars shelves={shelves.slice(0, 5)} />
               </section>
 
               <section className="panel recommendations-panel">
@@ -870,6 +894,36 @@ function DashboardSkeleton({ label }: { label: string }) {
   );
 }
 
+function EmptyState({
+  title,
+  detail,
+  actionLabel,
+  onAction,
+  compact = false,
+}: {
+  title: string;
+  detail: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`empty-state${compact ? ' compact' : ''}`} role="status">
+      <div className="empty-illustration" aria-hidden="true">
+        <span />
+        <i />
+      </div>
+      <div>
+        <strong>{title}</strong>
+        <p>{detail}</p>
+      </div>
+      {actionLabel && onAction ? (
+        <button className="ghost-btn reset-btn" type="button" onClick={onAction}>{actionLabel}</button>
+      ) : null}
+    </div>
+  );
+}
+
 function CountUp({ value }: { value: string }) {
   const match = value.match(/^(\D*)(-?\d+(?:[.,]\d+)?)(.*)$/);
   const target = match ? parseFloat(match[2].replace(',', '.')) : 0;
@@ -941,6 +995,7 @@ function MetricCard({
   pulse = false,
   sub,
   spark,
+  variant = 'operational',
 }: {
   label: string;
   value: string;
@@ -949,9 +1004,10 @@ function MetricCard({
   pulse?: boolean;
   sub?: string;
   spark?: number[];
+  variant?: 'primary' | 'risk' | 'operational' | 'progress' | 'insight';
 }) {
   return (
-    <article className={`metric-card ${tone}${pulse ? ' pulse' : ''}`}>
+    <article className={`metric-card metric-${variant} ${tone}${pulse ? ' pulse' : ''}`}>
       <span>{label}{pulse ? <i className="live-dot" aria-hidden="true" /> : null}</span>
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
@@ -970,6 +1026,8 @@ function ManagerFilterBar({
   onStore,
   onStatus,
   onIssue,
+  active,
+  onReset,
 }: {
   stores: string[];
   issues: MainIssue[];
@@ -979,6 +1037,8 @@ function ManagerFilterBar({
   onStore: (value: string) => void;
   onStatus: (value: 'all' | 'Bon' | 'Moyen' | 'Critique') => void;
   onIssue: (value: 'all' | MainIssue) => void;
+  active: boolean;
+  onReset: () => void;
 }) {
   return (
     <section className="filter-bar" aria-label="Filtres manager magasin">
@@ -1005,6 +1065,9 @@ function ManagerFilterBar({
           {issues.map((issue) => <option key={issue} value={issue}>{issue}</option>)}
         </select>
       </label>
+      <button className="filter-reset" type="button" onClick={onReset} disabled={!active}>
+        Reset filtres
+      </button>
     </section>
   );
 }
@@ -1068,7 +1131,19 @@ function PanelTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
   );
 }
 
-function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; emptyTh: number; backTh: number }) {
+function ShelfTable({ shelves, emptyTh, backTh, onReset }: { shelves: ShelfDecision[]; emptyTh: number; backTh: number; onReset: () => void }) {
+  if (shelves.length === 0) {
+    return (
+      <EmptyState
+        compact
+        title="Aucun rayon trouve"
+        detail="Les filtres actuels ne retournent aucun rayon a piloter."
+        actionLabel="Reset filtres"
+        onAction={onReset}
+      />
+    );
+  }
+
   return (
     <div className="table-wrap">
       <table>
@@ -1086,7 +1161,7 @@ function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; em
         </thead>
         <tbody>
           {shelves.map((shelf) => (
-            <tr key={shelf.key}>
+            <tr key={shelf.key} className={`row-${toneFromPriority(shelf.priority)}`}>
               <td>
                 <strong>{shelf.shelf}</strong>
                 <small>{shelf.category} - {shelf.store}</small>
@@ -1108,6 +1183,50 @@ function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; em
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+function StoreHealthBreakdown({ good, medium, critical }: { good: number; medium: number; critical: number }) {
+  const total = Math.max(1, good + medium + critical);
+  const items = [
+    { label: 'Bon', value: good, tone: 'success' as Tone },
+    { label: 'Moyen', value: medium, tone: 'warning' as Tone },
+    { label: 'Critique', value: critical, tone: 'danger' as Tone },
+  ];
+
+  return (
+    <div className="health-breakdown" aria-label="Repartition des statuts rayons">
+      {items.map((item) => (
+        <div className={`health-pill ${item.tone}`} key={item.label}>
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+          <i style={{ width: `${(item.value / total) * 100}%` }} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function ShelfRiskBars({ shelves }: { shelves: ShelfDecision[] }) {
+  if (shelves.length === 0) return <p className="muted">Aucun rayon a risque a visualiser.</p>;
+  const max = Math.max(1, ...shelves.map((shelf) => shelf.emptyRatio + shelf.backRatio));
+
+  return (
+    <div className="risk-bars" aria-label="Top rayons par risque">
+      {shelves.map((shelf) => {
+        const value = shelf.emptyRatio + shelf.backRatio;
+        return (
+          <div className="risk-bar-row" key={shelf.key}>
+            <div>
+              <strong>{shelf.shelf}</strong>
+              <small>{shelf.issue}</small>
+            </div>
+            <span>{pct(value)}</span>
+            <i style={{ width: `${clamp((value / max) * 100)}%` }} />
+          </div>
+        );
+      })}
     </div>
   );
 }
