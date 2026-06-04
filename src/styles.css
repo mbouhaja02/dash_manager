@@ -605,6 +605,43 @@ h1 {
   animation: shimmer 1.2s linear infinite;
 }
 
+.filter-bar {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: var(--shadow-soft);
+}
+
+.filter-bar label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-bar label > span {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+
+.filter-bar select {
+  width: 100%;
+  min-height: 38px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--soft);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .command-grid {
   display: grid;
   grid-template-columns: 1.28fr 1fr 1fr;
@@ -1535,6 +1572,7 @@ td small { margin-top: 4px; color: var(--muted); font-size: 11px; line-height: 1
   .tool-btn { flex: 1; }
   .score-layout { grid-template-columns: 1fr; }
   .business-band { grid-template-columns: 1fr; }
+  .filter-bar { grid-template-columns: 1fr; }
   .audit-card-grid,
   .benchmark-grid { grid-template-columns: 1fr; }
 }

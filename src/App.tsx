@@ -13,6 +13,16 @@ import {
 } from './dashboard';
 import { dashboardConfig } from './config';
 import { generateManagerReport } from './report';
+import {
+  getComplianceScore,
+  getFillRate,
+  getMainIssue,
+  getPriorityLevel,
+  getSeverityLevel,
+  issueWeight,
+  priorityWeight,
+  type MainIssue,
+} from './shelfguideCalculations';
 import './styles.css';
 
 type Priority = 'Haute' | 'Moyenne' | 'Faible';
@@ -25,8 +35,10 @@ interface ShelfDecision {
   shelf: string;
   category: string;
   status: string;
+  issue: MainIssue;
   emptyRatio: number;
   backRatio: number;
+  fillRate: number;
   profitability: number;
   emptySpaces: number;
   backProducts: number;
@@ -50,6 +62,7 @@ interface RecurringIssue {
   category: string;
   count: number;
   profitability: number;
+  issue: MainIssue;
 }
 
 interface ActivityItem {
@@ -76,9 +89,7 @@ function shortDay(value: string): string {
 }
 
 function statusFrom(row: AnalysisRow): string {
-  if (row.status === 'Critique' || row.severity === 'high' || row.weighted_profitability_percent < 65) return 'Critique';
-  if (row.status === 'Moyen' || row.weighted_profitability_percent < 85) return 'Moyen';
-  return 'Bon';
+  return getSeverityLevel(row);
 }
 
 function toneFromStatus(status: string): Tone {
@@ -94,23 +105,9 @@ function toneFromPriority(priority: Priority): Tone {
 }
 
 function priorityFrom(row: AnalysisRow, trend: number): Priority {
-  if (
-    statusFrom(row) === 'Critique' ||
-    row.empty_ratio_percent >= 15 ||
-    row.back_ratio_percent >= 10 ||
-    row.weighted_profitability_percent < 70 ||
-    trend <= -8
-  ) return 'Haute';
-
-  if (
-    statusFrom(row) === 'Moyen' ||
-    row.empty_ratio_percent >= 7 ||
-    row.back_ratio_percent >= 5 ||
-    row.weighted_profitability_percent < 85 ||
-    trend <= -4
-  ) return 'Moyenne';
-
-  return 'Faible';
+  if (trend <= -8) return 'Haute';
+  if (trend <= -4 && getPriorityLevel(row) === 'Faible') return 'Moyenne';
+  return getPriorityLevel(row);
 }
 
 function trendLabel(value: number): string {
@@ -136,14 +133,17 @@ function buildShelfDecisions(rows: AnalysisRow[]): ShelfDecision[] {
       const latest = sorted[0];
       const previous = sorted[1];
       const trend = previous
-        ? latest.weighted_profitability_percent - previous.weighted_profitability_percent
+        ? getComplianceScore(latest) - getComplianceScore(previous)
         : 0;
       const priority = priorityFrom(latest, trend);
+      const issue = getMainIssue(latest);
       const priorityScore =
-        (100 - latest.weighted_profitability_percent) +
+        (100 - getComplianceScore(latest)) +
         latest.empty_ratio_percent * 1.5 +
         latest.back_ratio_percent * 1.2 +
-        (trend < 0 ? Math.abs(trend) * 2 : 0);
+        (trend < 0 ? Math.abs(trend) * 2 : 0) +
+        priorityWeight(priority) * 10 +
+        issueWeight(issue) * 4;
 
       return {
         key,
@@ -151,9 +151,11 @@ function buildShelfDecisions(rows: AnalysisRow[]): ShelfDecision[] {
         shelf: latest.shelf_name,
         category: latest.category,
         status: statusFrom(latest),
+        issue,
         emptyRatio: latest.empty_ratio_percent,
         backRatio: latest.back_ratio_percent,
-        profitability: latest.weighted_profitability_percent,
+        fillRate: getFillRate(latest),
+        profitability: getComplianceScore(latest),
         emptySpaces: latest.empty_spaces,
         backProducts: latest.back_products,
         priority,
@@ -183,7 +185,7 @@ function buildTimeline(rows: AnalysisRow[], maxPoints = 7): TimelinePoint[] {
 
       return {
         label: shortDay(key),
-        conformity: average(items.map((item) => item.weighted_profitability_percent)),
+        conformity: average(items.map((item) => getComplianceScore(item))),
         anomalies,
         corrected: Math.max(0, previous - anomalies),
       };
@@ -207,7 +209,8 @@ function buildRecurringIssues(rows: AnalysisRow[]): RecurringIssue[] {
         shelf: sorted[0].shelf_name,
         category: sorted[0].category,
         count: items.length,
-        profitability: average(items.map((item) => item.weighted_profitability_percent)),
+        profitability: average(items.map((item) => getComplianceScore(item))),
+        issue: getMainIssue(sorted[0]),
       };
     })
     .sort((a, b) => b.count - a.count || a.profitability - b.profitability)
@@ -238,9 +241,9 @@ function toggleFullscreen(): void {
   else void document.documentElement.requestFullscreen?.();
 }
 
-type Range = '7d' | '30d' | 'all';
-const RANGE_DAYS: Record<Range, number> = { '7d': 7, '30d': 30, all: 36500 };
-const RANGE_LABELS: Record<Range, string> = { '7d': '7 jours', '30d': '30 jours', all: 'Tout' };
+type Range = 'today' | '7d' | '30d' | 'all';
+const RANGE_DAYS: Record<Exclude<Range, 'today' | 'all'>, number> = { '7d': 7, '30d': 30 };
+const RANGE_LABELS: Record<Range, string> = { today: "Aujourd'hui", '7d': '7 jours', '30d': '30 jours', all: 'Tout' };
 const DEFAULT_EMPTY = 10;
 const DEFAULT_BACK = 7;
 
@@ -253,6 +256,7 @@ function readTheme(): Theme {
 }
 
 function scopeByRange(rows: AnalysisRow[], range: Range): AnalysisRow[] {
+  if (range === 'today') return rows.filter((row) => isToday(row.audit_date));
   if (range === 'all') return rows;
   const cutoff = Date.now() - RANGE_DAYS[range] * 86400000;
   return rows.filter((row) => new Date(row.audit_date).getTime() >= cutoff);
@@ -262,7 +266,7 @@ function readParams() {
   const p = new URLSearchParams(window.location.search);
   const r = p.get('range');
   return {
-    range: (r === '7d' || r === '30d' || r === 'all' ? r : 'all') as Range,
+    range: (r === 'today' || r === '7d' || r === '30d' || r === 'all' ? r : 'all') as Range,
     query: p.get('q') ?? '',
     emptyTh: Number(p.get('empty')) || DEFAULT_EMPTY,
     backTh: Number(p.get('back')) || DEFAULT_BACK,
@@ -344,6 +348,9 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [splashProgress, setSplashProgress] = useState(8);
   const [theme, setTheme] = useState<Theme>(readTheme);
+  const [selectedStore, setSelectedStore] = useState('all');
+  const [selectedStatus, setSelectedStatus] = useState<'all' | 'Bon' | 'Moyen' | 'Critique'>('all');
+  const [selectedIssue, setSelectedIssue] = useState<'all' | MainIssue>('all');
   const quickSearchRef = useRef<HTMLInputElement>(null);
 
   // Splash : barre de progression au premier chargement uniquement
@@ -396,7 +403,21 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const scopedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
+  const rangedRows = useMemo(() => scopeByRange(rows, range), [rows, range]);
+  const storeOptions = useMemo(
+    () => Array.from(new Set(rangedRows.map((row) => row.store_name).filter(Boolean))).sort((a, b) => a.localeCompare(b)),
+    [rangedRows],
+  );
+  const issueOptions = useMemo(
+    () => Array.from(new Set(rangedRows.map((row) => getMainIssue(row)))),
+    [rangedRows],
+  );
+  const scopedRows = useMemo(() => rangedRows.filter((row) => {
+    if (selectedStore !== 'all' && row.store_name !== selectedStore) return false;
+    if (selectedStatus !== 'all' && statusFrom(row) !== selectedStatus) return false;
+    if (selectedIssue !== 'all' && getMainIssue(row) !== selectedIssue) return false;
+    return true;
+  }), [rangedRows, selectedStore, selectedStatus, selectedIssue]);
   const summary = useMemo(() => summarize(scopedRows), [scopedRows]);
   const shelves = useMemo(() => buildShelfDecisions(scopedRows), [scopedRows]);
   const timeline = useMemo(() => buildTimeline(scopedRows, range === '7d' ? 7 : 14), [scopedRows, range]);
@@ -429,10 +450,10 @@ export default function App() {
   function exportCsv() {
     downloadCsv(
       `shelfguide-rayons-${dayKey(new Date().toISOString())}.csv`,
-      ['Rayon', 'Categorie', 'Magasin', 'Statut', 'Vide %', 'Back-side %', 'Profitabilite %', 'Tendance pts', 'Priorite', 'Dernier audit', 'Audits'],
+      ['Rayon', 'Categorie', 'Magasin', 'Statut', 'Probleme', 'Remplissage %', 'Back-side %', 'Score %', 'Tendance pts', 'Priorite', 'Dernier audit', 'Audits'],
       shelves.map((s) => [
-        s.shelf, s.category, s.store, s.status,
-        Math.round(s.emptyRatio), Math.round(s.backRatio), Math.round(s.profitability),
+        s.shelf, s.category, s.store, s.status, s.issue,
+        Math.round(s.fillRate), Math.round(s.backRatio), Math.round(s.profitability),
         Math.round(s.trend), s.priority, formatDate(s.lastAudit), s.audits,
       ]),
     );
@@ -481,6 +502,7 @@ export default function App() {
   }).length;
   const actionsCorrected = latestTimeline?.corrected ?? 0;
   const maxAnomalies = Math.max(1, ...timeline.map((point) => point.anomalies));
+  const avgFillRate = average(scopedRows.map((row) => getFillRate(row)));
   const visibleBreaks = shelves.filter((shelf) => shelf.emptyRatio >= emptyTh).slice(0, 4);
   const badOrientation = shelves.filter((shelf) => shelf.backRatio >= backTh).slice(0, 4);
   const degrading = shelves.filter((shelf) => shelf.trend <= -4).slice(0, 4);
@@ -571,7 +593,7 @@ export default function App() {
               <kbd>Ctrl K</kbd>
             </label>
             <div className="seg" role="group" aria-label="Periode d'analyse">
-              {(['7d', '30d', 'all'] as Range[]).map((r) => (
+              {(['today', '7d', '30d', 'all'] as Range[]).map((r) => (
                 <button key={r} className={range === r ? 'active' : ''} onClick={() => setRange(r)}>{RANGE_LABELS[r]}</button>
               ))}
             </div>
@@ -663,7 +685,7 @@ export default function App() {
                 <strong className="priority-title">{priorityShelf?.shelf ?? 'Aucun rayon'}</strong>
                 <p>
                   {priorityShelf
-                    ? `${pct(priorityShelf.emptyRatio)} vide, ${pct(priorityShelf.backRatio)} back-side, ${pct(priorityShelf.profitability)} profitabilite.`
+                    ? `${pct(priorityShelf.emptyRatio)} vide, ${pct(priorityShelf.backRatio)} back-side, ${pct(priorityShelf.profitability)} score.`
                     : 'Aucune priorite detectee.'}
                 </p>
                 {priorityShelf ? (
@@ -687,12 +709,23 @@ export default function App() {
               </article>
             </section>
 
+            <ManagerFilterBar
+              stores={storeOptions}
+              issues={issueOptions}
+              selectedStore={selectedStore}
+              selectedStatus={selectedStatus}
+              selectedIssue={selectedIssue}
+              onStore={setSelectedStore}
+              onStatus={setSelectedStatus}
+              onIssue={setSelectedIssue}
+            />
+
             <section className="metric-grid">
               <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} />
               <MetricCard
                 label="Taux moyen de remplissage"
-                value={pct(summary.avgProfitability)}
-                detail="Score pondere magasin"
+                value={pct(avgFillRate)}
+                detail="Facings remplis"
                 tone="success"
                 spark={timeline.map((point) => point.conformity)}
               />
@@ -928,6 +961,54 @@ function MetricCard({
   );
 }
 
+function ManagerFilterBar({
+  stores,
+  issues,
+  selectedStore,
+  selectedStatus,
+  selectedIssue,
+  onStore,
+  onStatus,
+  onIssue,
+}: {
+  stores: string[];
+  issues: MainIssue[];
+  selectedStore: string;
+  selectedStatus: 'all' | 'Bon' | 'Moyen' | 'Critique';
+  selectedIssue: 'all' | MainIssue;
+  onStore: (value: string) => void;
+  onStatus: (value: 'all' | 'Bon' | 'Moyen' | 'Critique') => void;
+  onIssue: (value: 'all' | MainIssue) => void;
+}) {
+  return (
+    <section className="filter-bar" aria-label="Filtres manager magasin">
+      <label>
+        <span>Magasin</span>
+        <select value={selectedStore} onChange={(event) => onStore(event.target.value)}>
+          <option value="all">Tous magasins</option>
+          {stores.map((store) => <option key={store} value={store}>{store}</option>)}
+        </select>
+      </label>
+      <label>
+        <span>Statut</span>
+        <select value={selectedStatus} onChange={(event) => onStatus(event.target.value as 'all' | 'Bon' | 'Moyen' | 'Critique')}>
+          <option value="all">Tous statuts</option>
+          <option value="Critique">Critique</option>
+          <option value="Moyen">Moyen</option>
+          <option value="Bon">Bon</option>
+        </select>
+      </label>
+      <label>
+        <span>Anomalie</span>
+        <select value={selectedIssue} onChange={(event) => onIssue(event.target.value as 'all' | MainIssue)}>
+          <option value="all">Tous types</option>
+          {issues.map((issue) => <option key={issue} value={issue}>{issue}</option>)}
+        </select>
+      </label>
+    </section>
+  );
+}
+
 function BusinessBand({
   ruptureCostDaily,
   recovered,
@@ -995,9 +1076,10 @@ function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; em
           <tr>
             <th>Rayon</th>
             <th>Statut</th>
-            <th>Empty ratio</th>
+            <th>Probleme</th>
+            <th>Remplissage</th>
             <th>Back-side</th>
-            <th>Profitabilite</th>
+            <th>Score</th>
             <th>Tendance</th>
             <th>Priorite</th>
           </tr>
@@ -1010,8 +1092,9 @@ function ShelfTable({ shelves, emptyTh, backTh }: { shelves: ShelfDecision[]; em
                 <small>{shelf.category} - {shelf.store}</small>
               </td>
               <td><StatusBadge tone={toneFromStatus(shelf.status)} label={shelf.status} /></td>
+              <td>{shelf.issue}</td>
               <td>
-                <RatioCell value={shelf.emptyRatio} tone={shelf.emptyRatio >= emptyTh ? 'danger' : shelf.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success'} />
+                <RatioCell value={shelf.fillRate} tone={shelf.emptyRatio >= emptyTh ? 'danger' : shelf.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success'} reverse />
               </td>
               <td>
                 <RatioCell value={shelf.backRatio} tone={shelf.backRatio >= backTh ? 'warning' : 'success'} />
@@ -1331,7 +1414,7 @@ function RecurringList({ issues }: { issues: RecurringIssue[] }) {
           <span>{String(index + 1).padStart(2, '0')}</span>
           <div>
             <strong>{issue.shelf}</strong>
-            <small>{issue.category}</small>
+            <small>{issue.category} - {issue.issue}</small>
           </div>
           <em>{issue.count} fois</em>
         </div>
