@@ -512,6 +512,7 @@ export default function App() {
   const notAnalysedToday = shelves.filter((shelf) => !isToday(shelf.lastAudit)).slice(0, 4);
   const storeClean = summary.avgProfitability >= 85 && criticalCount === 0;
   const alertCount = criticalCount + visibleBreaks.length + badOrientation.length;
+  const managerOpenActions = openIssues + visibleBreaks.length + badOrientation.length + degrading.length;
   const activityItems: ActivityItem[] = [
     priorityShelf
       ? {
@@ -563,7 +564,7 @@ export default function App() {
       {showSplash ? (
         <Splash brand="ShelfGuide" sub={dashboardConfig.networkLabel} logoUrl={brandLogoUrl} progress={splashProgress} onSkip={() => setShowSplash(false)} />
       ) : null}
-      <main className="app-frame">
+      <main className="app-frame manager-dashboard">
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark logo-mark">
@@ -595,7 +596,7 @@ export default function App() {
           <div>
             <p className="eyebrow">ShelfGuide retail intelligence</p>
             <h1>Dashboard Manager</h1>
-            <p className="subtitle">Suivez les audits rayon, les anomalies et les actions prioritaires de votre magasin.</p>
+            <p className="subtitle">Pilotage magasin et execution terrain pour prioriser les rayons a risque.</p>
           </div>
           <div className="header-actions">
             <label className="quick-search" aria-label="Recherche rapide">
@@ -676,12 +677,12 @@ export default function App() {
         {rows.length > 0 ? (
           <>
             <section className="command-grid manager-command-grid">
-              <article className="command-card score-card store-health-card">
+              <article className="command-card score-card store-health-card store-health-hero">
                 <div className="section-heading">
-                  <span>Score global conformite</span>
+                  <span>Sante du magasin</span>
                   <StatusBadge tone={storeClean ? 'success' : 'warning'} label={storeClean ? 'Magasin propre' : 'Plan action'} />
                 </div>
-                <div className="score-layout">
+                <div className="score-layout hero-mainline">
                   <div>
                     <strong className="score-value"><CountUp value={pct(summary.avgProfitability)} /></strong>
                     <p>
@@ -697,6 +698,15 @@ export default function App() {
                     <span><CountUp value={pct(summary.avgProfitability)} /></span>
                   </div>
                 </div>
+                <div className="hero-metric-grid" aria-label="Indicateurs magasin">
+                  <span><b>{pct(avgFillRate)}</b> remplissage</span>
+                  <span><b>{criticalCount}</b> critiques</span>
+                  <span><b>{auditsThisMonth}</b> audits mois</span>
+                  <span><b>{priorityShelf?.shelf ?? 'Stable'}</b> rayon prioritaire</span>
+                </div>
+                <a className="hero-cta" href="#ranking">
+                  {priorityShelf ? 'Prioriser le rayon critique' : 'Voir les rayons a risque'}
+                </a>
               </article>
 
               <article className="command-card priority-card priority-shelf-card">
@@ -716,6 +726,7 @@ export default function App() {
                     <strong>{pct(100 - priorityShelf.profitability)} de perte potentielle</strong>
                   </div>
                 ) : null}
+                <a className="card-cta" href="#ranking">Voir priorite</a>
               </article>
 
               <article className="command-card execution-card team-execution-card">
@@ -728,6 +739,7 @@ export default function App() {
                 <div className="progress-line">
                   <i style={{ width: `${clamp(coverageToday)}%` }} />
                 </div>
+                <a className="card-cta" href="#alerts">Voir alertes</a>
               </article>
             </section>
 
@@ -744,37 +756,26 @@ export default function App() {
               onReset={resetFilters}
             />
 
-            <section className="metric-grid">
-              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} variant="operational" />
+            <section className="metric-grid manager-kpi-grid">
+              <MetricCard label="Score magasin" value={pct(summary.avgProfitability)} detail={storeClean ? 'Magasin stable' : 'Correction requise'} tone={storeClean ? 'success' : 'warning'} variant="primary" />
               <MetricCard
                 label="Taux moyen de remplissage"
                 value={pct(avgFillRate)}
                 detail="Facings remplis"
                 tone="success"
-                spark={timeline.map((point) => point.conformity)}
                 variant="primary"
               />
-              <MetricCard
-                label="Zones vides detectees"
-                value={String(summary.emptySpaces)}
-                detail={`${pct(summary.avgEmptyRatio)} de vide moyen`}
-                tone="warning"
-                sub={`~ ${formatMAD(ruptureCostDaily)} CA/jour`}
-                spark={timeline.map((point) => 100 - point.conformity)}
-                variant="risk"
-              />
+              <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} variant="operational" />
               <MetricCard
                 label="Anomalies critiques"
                 value={String(criticalCount)}
                 detail={criticalCount > 0 ? 'Action immediate' : 'Tout est conforme'}
                 tone={criticalCount > 0 ? 'danger' : 'success'}
                 pulse={criticalCount > 0}
-                spark={timeline.map((point) => point.anomalies)}
                 variant="risk"
               />
-              <MetricCard label="Actions corrigees" value={String(actionsCorrected)} detail="Derniere periode" tone="success" spark={timeline.map((point) => point.corrected)} variant="progress" />
-              <MetricCard label="Rayons a risque" value={String(openIssues)} detail={`${mediumCount} moyens, ${criticalCount} critiques`} tone={openIssues > 0 ? 'warning' : 'success'} variant="operational" />
-              <MetricCard label="Produits mal orientes" value={String(summary.backProducts)} detail={`${pct(summary.avgBackRatio)} back-side moyen`} variant="operational" />
+              <MetricCard label="Audits realises ce mois" value={String(auditsThisMonth)} detail={`${summary.audits} audits visibles`} variant="operational" />
+              <MetricCard label="Actions ouvertes" value={String(managerOpenActions)} detail={`${visibleBreaks.length} ruptures, ${badOrientation.length} facing`} tone={managerOpenActions > 0 ? 'warning' : 'success'} variant="insight" />
             </section>
 
             <BusinessBand
@@ -1011,13 +1012,16 @@ function MetricCard({
   spark?: number[];
   variant?: 'primary' | 'risk' | 'operational' | 'progress' | 'insight';
 }) {
+  const cleanSpark = spark?.filter((value) => Number.isFinite(value));
+  const showSpark = cleanSpark && cleanSpark.length >= 2;
+
   return (
     <article className={`metric-card metric-${variant} ${tone}${pulse ? ' pulse' : ''}`}>
       <span>{label}{pulse ? <i className="live-dot" aria-hidden="true" /> : null}</span>
       <strong><CountUp value={value} /></strong>
       <small>{detail}</small>
       {sub ? <small className="metric-sub">{sub}</small> : null}
-      {spark ? <Sparkline values={spark} /> : null}
+      {showSpark ? <Sparkline values={cleanSpark} /> : null}
     </article>
   );
 }
@@ -1045,8 +1049,20 @@ function ManagerFilterBar({
   active: boolean;
   onReset: () => void;
 }) {
+  const activeItems = [
+    selectedStore !== 'all' ? `Magasin ${selectedStore}` : null,
+    selectedStatus !== 'all' ? `Statut ${selectedStatus}` : null,
+    selectedIssue !== 'all' ? `Anomalie ${selectedIssue}` : null,
+  ].filter((item): item is string => Boolean(item));
+
   return (
     <section className="filter-bar" aria-label="Filtres manager magasin">
+      {active ? (
+        <div className="filter-summary">
+          <span>Filtres actifs :</span>
+          <strong>{activeItems.join(' - ')}</strong>
+        </div>
+      ) : null}
       <label>
         <span>Magasin</span>
         <select value={selectedStore} onChange={(event) => onStore(event.target.value)}>
@@ -1070,9 +1086,11 @@ function ManagerFilterBar({
           {issues.map((issue) => <option key={issue} value={issue}>{issue}</option>)}
         </select>
       </label>
-      <button className="filter-reset" type="button" onClick={onReset} disabled={!active}>
-        Reset filtres
-      </button>
+      {active ? (
+        <button className="filter-reset" type="button" onClick={onReset}>
+          Reset filtres
+        </button>
+      ) : null}
     </section>
   );
 }
@@ -1149,45 +1167,49 @@ function ShelfTable({ shelves, emptyTh, backTh, onReset }: { shelves: ShelfDecis
     );
   }
 
+  const criticalCount = shelves.filter((shelf) => shelf.priority === 'Haute').length;
+
   return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Rayon</th>
-            <th>Statut</th>
-            <th>Probleme</th>
-            <th>Remplissage</th>
-            <th>Back-side</th>
-            <th>Score</th>
-            <th>Tendance</th>
-            <th>Priorite</th>
-          </tr>
-        </thead>
-        <tbody>
-          {shelves.map((shelf) => (
-            <tr key={shelf.key} className={`row-${toneFromPriority(shelf.priority)}`}>
-              <td>
+    <div className="shelf-card-list" aria-label="Rayons a risque">
+      <div className="list-summary">
+        <strong>{shelves.length} rayons a piloter</strong>
+        <span>{criticalCount} priorites hautes - trie par risque terrain</span>
+      </div>
+      {shelves.map((shelf) => {
+        const priorityTone = toneFromPriority(shelf.priority);
+        const fillTone = shelf.emptyRatio >= emptyTh ? 'danger' : shelf.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success';
+        const backTone = shelf.backRatio >= backTh ? 'warning' : 'success';
+        return (
+          <article className={`risk-shelf-card row-${priorityTone}`} key={shelf.key}>
+            <div className="card-topline">
+              <div>
+                <StatusBadge tone={priorityTone} label={shelf.priority} />
+                <StatusBadge tone={toneFromStatus(shelf.status)} label={shelf.status} />
+              </div>
+              <span className={shelf.trend < -1 ? 'trend-down' : shelf.trend > 1 ? 'trend-up' : ''}>{trendLabel(shelf.trend)}</span>
+            </div>
+
+            <div className="card-title-row">
+              <div>
                 <strong>{shelf.shelf}</strong>
                 <small>{shelf.category} - {shelf.store}</small>
-              </td>
-              <td><StatusBadge tone={toneFromStatus(shelf.status)} label={shelf.status} /></td>
-              <td>{shelf.issue}</td>
-              <td>
-                <RatioCell value={shelf.fillRate} tone={shelf.emptyRatio >= emptyTh ? 'danger' : shelf.emptyRatio >= emptyTh * 0.7 ? 'warning' : 'success'} reverse />
-              </td>
-              <td>
-                <RatioCell value={shelf.backRatio} tone={shelf.backRatio >= backTh ? 'warning' : 'success'} />
-              </td>
-              <td>
-                <RatioCell value={shelf.profitability} tone={toneFromStatus(shelf.status)} reverse />
-              </td>
-              <td className={shelf.trend < -1 ? 'trend-down' : shelf.trend > 1 ? 'trend-up' : ''}>{trendLabel(shelf.trend)}</td>
-              <td><StatusBadge tone={toneFromPriority(shelf.priority)} label={shelf.priority} /></td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+              </div>
+              <p>{shelf.issue}</p>
+            </div>
+
+            <div className="card-metrics-grid">
+              <RatioCell value={shelf.fillRate} tone={fillTone} reverse />
+              <RatioCell value={shelf.backRatio} tone={backTone} />
+              <RatioCell value={shelf.profitability} tone={toneFromStatus(shelf.status)} reverse />
+            </div>
+
+            <div className="card-action-row">
+              <span>{pct(shelf.emptyRatio)} vide - {pct(shelf.backRatio)} back-side</span>
+              <a href="#alerts">Envoyer l'equipe</a>
+            </div>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -1435,12 +1457,12 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
         >
           <defs>
             <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="rgba(17, 191, 210, .18)" />
-              <stop offset="100%" stopColor="rgba(17, 191, 210, 0)" />
+              <stop offset="0%" stopColor="rgba(59, 130, 246, .20)" />
+              <stop offset="100%" stopColor="rgba(59, 130, 246, 0)" />
             </linearGradient>
             <linearGradient id="lineGrad" x1="0" y1="0" x2="1" y2="0">
-              <stop offset="0%" stopColor="#11bfd2" />
-              <stop offset="100%" stopColor="#078da0" />
+              <stop offset="0%" stopColor="#1D4ED8" />
+              <stop offset="100%" stopColor="#4184F5" />
             </linearGradient>
           </defs>
 
@@ -1502,7 +1524,7 @@ function Timeline({ points, maxAnomalies }: { points: TimelinePoint[]; maxAnomal
           >
             <b>{hovered.label}</b>
             <div className="tt-row">
-              <span><i style={{ background: '#11bfd2' }} />Conformite</span>
+              <span><i style={{ background: '#3B82F6' }} />Conformite</span>
               <strong>{pct(hovered.conformity)}</strong>
             </div>
             <div className="tt-row">
